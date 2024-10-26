@@ -49,20 +49,6 @@ int main()
                                          boost::asio::ssl::context::pem);
         std::cerr << "Cert Loaded: \n";
 
-        conn->async_method_call(
-            [](boost::system::error_code ec,
-               std::variant<std::monostate, bool>& v) {
-                if (ec)
-                {
-                    std::cerr
-                        << "Error getting property: " << ec.message() << "\n";
-                    return;
-                }
-                std::cout << "mfaenbled: " << std::get<bool>(v) << "\n";
-            },
-            busName.data(), objPath.data(), "org.freedesktop.DBus.Properties",
-            "Get", interface.data(), "mfaenbled");
-
         HttpRouter router;
         router.setIoContext(io_context);
         HttpServer server(io_context, ssl_context, 8080, router);
