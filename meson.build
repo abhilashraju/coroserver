@@ -4,7 +4,11 @@ project('coroserver', 'cpp', version: '1.0.0', default_options: ['cpp_std=c++20'
 boost_dep = dependency('boost', required: true)
 openssl_dep = dependency('openssl', required: true)
 sdbusplus_dep = dependency('sdbusplus')
-nlohmann_json_dep = dependency('nlohmann_json', required: true)
+nlohmann_json_dep = dependency(
+    'nlohmann_json',
+    version: '>=3.11.3',
+    include_type: 'system',
+)
 
 # Define the executable
 executable('coroserver',
