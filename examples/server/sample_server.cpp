@@ -48,12 +48,15 @@ int main()
         ssl_context.use_private_key_file("/etc/ssl/private/server-key.pem",
                                          boost::asio::ssl::context::pem);
         std::cerr << "Cert Loaded: \n";
-
+        std::string socket_path = "/tmp/http_server.sock";
+        std::remove(socket_path.c_str());
         HttpRouter router;
         router.setIoContext(io_context);
-        HttpServer server(io_context, ssl_context, 8080, router);
+        TcpStreamType acceptor(io_context, 8080, ssl_context);
+        // UnixStreamType unixAcceptor(io_context, socket_path, ssl_context);
+        HttpServer server(io_context, acceptor, router);
         router.add_get_handler(
-            "/mfaenbled",
+            "/mfaenabled",
             [&](auto& req, auto& params) -> net::awaitable<Response> {
                 auto [ec, enabled] = co_await getProperty<bool>(
                     *conn, busName.data(), objPath.data(), interface.data(),
@@ -95,7 +98,7 @@ int main()
                                                 req.version());
             });
         router.add_post_handler(
-            "/mfaenbled",
+            "/mfaenabled",
             [&](auto& req, auto& params) -> net::awaitable<Response> {
                 net::steady_timer timer(io_context);
 

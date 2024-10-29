@@ -8,7 +8,6 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
-#include <boost/asio/ssl.hpp>
 
 #include <concepts>
 
@@ -76,23 +75,6 @@ struct HttpRouter
         add_handler({{path.data(), path.length()}, http::verb::get},
                     make_awitable_handler((FUNC&&)h));
     }
-    // template <AwaitableYieldResponseHandler FUNC>
-    // void add_get_handler(std::string_view path, FUNC&& h)
-    // {
-    //     auto reply = co_await net::async_initiate<
-    //         net::use_awaitable_t<>,
-    //         void(boost::system::error_code, sdbusplus::message::message)>(
-    //         [&](auto handler) { bus.async_send(method, std::move(handler));
-    //         }, use_awaitable);
-    //     auto handler = [this, h = std::move(h)](auto& req, auto& params)
-    //         -> net::awaitable<Response> {
-    //         auto executor = co_await net::this_coro::executor;
-    //         net::yield_context yc{executor};
-    //         co_await h(req, params, yc);
-    //     };
-    //     add_handler({{path.data(), path.length()}, http::verb::get},
-    //                 std::move(handler));
-    // }
 
     template <AwaitableResponseHandler FUNC>
     void add_post_handler(std::string_view path, FUNC&& h)
@@ -169,14 +151,77 @@ struct HttpRouter
     HANDLER_MAP empty_handlers;
     std::optional<std::reference_wrapper<net::io_context>> ioc;
 };
+struct TcpStreamType
+{
+    using stream_type = boost::asio::ssl::stream<tcp::socket>;
+    tcp::acceptor acceptor_;
+    boost::asio::io_context& context;
+    boost::asio::ssl::context& ssl_context_;
+    TcpStreamType(boost::asio::io_context& io_context, short port,
+                  boost::asio::ssl::context& ssl_context) :
+        acceptor_(io_context, tcp::endpoint(tcp::v4(), port)),
+        context(io_context), ssl_context_(ssl_context)
+    {}
+
+    template <typename Handler>
+    void accept(Handler&& handler)
+    {
+        auto socket = std::make_shared<stream_type>(context, ssl_context_);
+        acceptor_.async_accept(socket->lowest_layer(),
+                               [this, socket, handler = std::move(handler)](
+                                   boost::system::error_code ec) {
+                                   if (!ec)
+                                   {
+                                       handler(std::move(socket));
+                                   }
+                               });
+    }
+    auto get_remote_endpoint(stream_type& socket)
+    {
+        return socket.next_layer().remote_endpoint();
+    }
+};
+
+struct UnixStreamType
+{
+    using stream_type =
+        boost::asio::ssl::stream<boost::asio::local::stream_protocol::socket>;
+    using unix_domain = boost::asio::local::stream_protocol;
+    unix_domain::acceptor acceptor_;
+    boost::asio::io_context& context;
+    boost::asio::ssl::context& ssl_context_;
+    UnixStreamType(boost::asio::io_context& io_context, const std::string& path,
+                   boost::asio::ssl::context& ssl_context) :
+        acceptor_(io_context,
+                  boost::asio::local::stream_protocol::endpoint(path)),
+        context(io_context), ssl_context_(ssl_context)
+    {}
+
+    template <typename Handler>
+    void accept(Handler&& handler)
+    {
+        auto socket = std::make_shared<stream_type>(context, ssl_context_);
+        acceptor_.async_accept(socket->lowest_layer(),
+                               [this, socket, handler = std::move(handler)](
+                                   boost::system::error_code ec) {
+                                   if (!ec)
+                                   {
+                                       handler(std::move(socket));
+                                   }
+                               });
+    }
+    auto get_remote_endpoint(stream_type& socket)
+    {
+        return tcp::endpoint();
+    }
+};
+template <typename Accepter>
 class HttpServer
 {
   public:
-    HttpServer(boost::asio::io_context& io_context,
-               boost::asio::ssl::context& ssl_context, short port,
+    HttpServer(boost::asio::io_context& io_context, Accepter& accepter,
                HttpRouter& router) :
-        context(io_context), ssl_context_(ssl_context),
-        acceptor_(io_context, tcp::endpoint(tcp::v4(), port)), router_(router)
+        context(io_context), acceptor_(accepter), router_(router)
     {
         start_accept();
     }
@@ -184,22 +229,28 @@ class HttpServer
   private:
     void start_accept()
     {
-        auto socket = std::make_shared<boost::asio::ssl::stream<tcp::socket>>(
-            context, ssl_context_);
-        acceptor_.async_accept(
-            socket->lowest_layer(),
-            [this, socket](boost::system::error_code ec) {
-                if (!ec)
-                {
-                    boost::asio::co_spawn(context, handle_client(socket),
-                                          boost::asio::detached);
-                }
-                start_accept();
-            });
+        // auto socket =
+        // std::make_shared<boost::asio::ssl::stream<tcp::socket>>(
+        //     context, ssl_context_);
+        // acceptor_.async_accept(
+        //     socket->lowest_layer(),
+        //     [this, socket](boost::system::error_code ec) {
+        //         if (!ec)
+        //         {
+        //             boost::asio::co_spawn(context, handle_client(socket),
+        //                                   boost::asio::detached);
+        //         }
+        //         start_accept();
+        //     });
+        acceptor_.accept([this](auto&& socket) {
+            boost::asio::co_spawn(context, handle_client(socket),
+                                  boost::asio::detached);
+            start_accept();
+        });
     }
-
-    boost::asio::awaitable<void> handle_client(
-        std::shared_ptr<boost::asio::ssl::stream<tcp::socket>> socket)
+    template <typename Socket>
+    boost::asio::awaitable<void>
+        handle_client(std::shared_ptr<boost::asio::ssl::stream<Socket>> socket)
     {
         // Perform SSL handshake
         co_await socket->async_handshake(boost::asio::ssl::stream_base::server,
@@ -224,7 +275,7 @@ class HttpServer
         try
         {
             res = co_await router_.process_request(
-                req, socket->next_layer().remote_endpoint());
+                req, acceptor_.get_remote_endpoint(*socket));
         }
         catch (const std::exception& e)
         {
@@ -252,7 +303,6 @@ class HttpServer
     }
 
     boost::asio::io_context& context;
-    boost::asio::ssl::context& ssl_context_;
-    tcp::acceptor acceptor_;
+    Accepter& acceptor_;
     HttpRouter& router_;
 };

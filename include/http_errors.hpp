@@ -81,5 +81,5 @@ concept IsNlohmannJson = std::is_same_v<T, nlohmann::json>;
 template <IsNlohmannJson T>
 inline Response make_success_response(const T& js, http::status st, int version)
 {
-    return make_success_response(js.dump(), st, version, "application/json");
+    return make_success_response(js.dump(2), st, version, "application/json");
 }
