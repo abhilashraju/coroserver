@@ -1,6 +1,26 @@
 #pragma once
 #include "beastdefs.hpp"
+#include "make_awaitable.hpp"
 
+inline AwaitableResult<net::ip::tcp::resolver::results_type>
+    awaitable_resolve(typename net::ip::tcp::resolver& resolver,
+                      const std::string& host, const std::string& port)
+{
+    auto h = make_awaitable_handler<net::ip::tcp::resolver::results_type>(
+        [&](auto handler) {
+            // resolver.async_resolve(
+            //     host, port,
+            //     [handler = std::move(handler)](
+            //         boost::system::error_code ec,
+            //         net::ip::tcp::resolver::results_type results) mutable {
+            //         handler(ec, std::move(results));
+            //     });
+            boost::system::error_code ec;
+            auto results = resolver.resolve(host, port, ec);
+            handler(ec, results);
+        });
+    co_return co_await h();
+}
 template <typename Stream>
 class HttpClient
 {
@@ -20,7 +40,8 @@ class HttpClient
             net::ip::tcp::resolver resolver_(ioc);
             try
             {
-                const auto results = resolver_.resolve(host, port, ec);
+                auto [ec, results] =
+                    co_await awaitable_resolve(resolver_, host, port);
                 if (ec)
                     co_return ec;
                 co_await net::async_connect(

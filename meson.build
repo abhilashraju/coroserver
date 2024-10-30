@@ -18,4 +18,9 @@ if not nlohmann_json_dep.found()
     nlohmann_json_proj = subproject('nlohmann_json', required: true)
     nlohmann_json_dep = nlohmann_json_proj.get_variable('nlohmann_json_dep')
 endif
+
+cxx = meson.get_compiler('cpp')
+# Add dependencies
+add_project_arguments(
+    cxx.get_supported_arguments(['-DBOOST_ASIO_DISABLE_THREADS']),language: 'cpp')
 subdir('examples')
