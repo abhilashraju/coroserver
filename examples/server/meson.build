@@ -3,7 +3,7 @@
 # Define the executable
 executable('coroserver',
   'sample_server.cpp',
-  dependencies: [boost_dep, openssl_dep, sdbusplus_dep, nlohmann_json_dep,coroserver_dep],
+  dependencies: [coroserver_dep],
   install: true,
   install_dir: '/usr/bin'
 )

@@ -1,0 +1,4 @@
+[wrap-git]
+directory = boost-url
+url = https://github.com/boostorg/url.git
+revision = master
