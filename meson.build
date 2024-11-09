@@ -1,7 +1,7 @@
-project('coroserver', 'cpp', version: '1.0.0', default_options: ['cpp_std=c++20'])
+project('reactor', 'cpp', version: '1.0.0', default_options: ['cpp_std=c++20'])
 
 # Find Boost dependency
-boost_dep = dependency('boost', modules : ['context', 'system'],required: true)
+boost_dep = dependency('boost', required: true)
 openssl_dep = dependency('openssl', required: true)
 sdbusplus_dep = dependency('sdbusplus', required: true, include_type: 'system')
 

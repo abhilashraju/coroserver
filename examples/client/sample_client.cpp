@@ -4,12 +4,9 @@
 #include "logger.hpp"
 #include "webclient.hpp"
 
-#include <boost/asio/experimental/awaitable_operators.hpp>
-
 #include <ranges>
 #include <regex>
 #include <vector>
-using namespace boost::asio::experimental::awaitable_operators;
 
 net::awaitable<void> run_tcp_client(net::io_context& ioc, std::string_view ep,
                                     std::string_view port)

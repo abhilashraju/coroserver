@@ -140,54 +140,6 @@ struct WebClient
         return *this;
     }
 
-    // AwaitableResult<boost::system::error_code>
-    //     connect_with_timeout(const std::string& host, const std::string&
-    //     port)
-    // {
-    //     net::steady_timer timer(client.getExecutor());
-    //     boost::system::error_code ec;
-    //     timer.expires_after(std::chrono::seconds(5)); // Set timeout duration
-
-    //     bool connect_finished = false;
-    //     bool timer_finished = false;
-
-    //     auto connect_task = [&]() -> net::awaitable<void> {
-    //         ec = co_await client.connect(host, port);
-    //         connect_finished = true;
-    //         if (!timer_finished)
-    //         {
-    //             timer.cancel();
-    //         }
-    //     };
-
-    //     auto timer_task = [&]() -> net::awaitable<void> {
-    //         co_await timer.async_wait(
-    //             net::redirect_error(net::use_awaitable, ec));
-    //         timer_finished = true;
-    //         if (!connect_finished)
-    //         {
-    //             client.cancel();
-    //         }
-    //     };
-
-    //     co_spawn(co_await net::this_coro::executor, connect_task(),
-    //              net::detached);
-    //     co_spawn(co_await net::this_coro::executor, timer_task(),
-    //              net::detached);
-
-    //     while (!connect_finished && !timer_finished)
-    //     {
-    //         co_await net::post(co_await net::this_coro::executor,
-    //                            net::use_awaitable);
-    //     }
-
-    //     if (ec == net::error::operation_aborted)
-    //     {
-    //         co_return net::error::timed_out;
-    //     }
-
-    //     co_return ec;
-    // }
     AwaitableResult<boost::system::error_code> tryConnect()
     {
         if (isConnected)
