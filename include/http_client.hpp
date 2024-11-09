@@ -2,12 +2,16 @@
 #include "beastdefs.hpp"
 #include "make_awaitable.hpp"
 
+#include <boost/asio/steady_timer.hpp>
+
+#include <chrono>
+using namespace std::chrono_literals;
 inline AwaitableResult<net::ip::tcp::resolver::results_type>
     awaitable_resolve(typename net::ip::tcp::resolver& resolver,
                       const std::string& host, const std::string& port)
 {
     auto h = make_awaitable_handler<net::ip::tcp::resolver::results_type>(
-        [&](auto handler) {
+        [&](auto promise) {
             // resolver.async_resolve(
             //     host, port,
             //     [handler = std::move(handler)](
@@ -17,7 +21,7 @@ inline AwaitableResult<net::ip::tcp::resolver::results_type>
             //     });
             boost::system::error_code ec;
             auto results = resolver.resolve(host, port, ec);
-            handler(ec, results);
+            promise.setValues(ec, results);
         });
     co_return co_await h();
 }
@@ -35,7 +39,7 @@ class HttpClient
         connect(const std::string& host, const std::string& port)
     {
         boost::system::error_code ec;
-        if constexpr (std::is_same_v<Stream, tcp::socket>)
+        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
         {
             net::ip::tcp::resolver resolver_(ioc);
             try
@@ -44,9 +48,9 @@ class HttpClient
                     co_await awaitable_resolve(resolver_, host, port);
                 if (ec)
                     co_return ec;
-                co_await net::async_connect(
-                    stream_.next_layer(), results,
-                    net::redirect_error(net::use_awaitable, ec));
+                setTimeout(5s);
+                co_await getLowestLayer().async_connect(
+                    results, net::redirect_error(net::use_awaitable, ec));
                 if (ec)
                     co_return ec;
             }
@@ -58,10 +62,11 @@ class HttpClient
         }
         else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
         {
-            stream_.next_layer().connect(unix_domain::endpoint(host), ec);
+            getLowestLayer().connect(unix_domain::endpoint(host), ec);
             if (ec)
                 co_return ec;
         }
+        setTimeout(5s);
         co_await stream_.async_handshake(
             ssl::stream_base::client,
             net::redirect_error(net::use_awaitable, ec));
@@ -71,6 +76,7 @@ class HttpClient
     net::awaitable<boost::system::error_code> send_request(const Request& req)
     {
         boost::system::error_code ec;
+        setTimeout(5s);
         co_await http::async_write(stream_, req,
                                    net::redirect_error(net::use_awaitable, ec));
         co_return ec;
@@ -82,12 +88,32 @@ class HttpClient
         boost::system::error_code ec;
         boost::beast::flat_buffer buffer;
         Response res;
+        setTimeout(5s);
         co_await http::async_read(stream_, buffer, res,
                                   net::redirect_error(net::use_awaitable, ec));
         co_return std::make_pair(ec, res);
     }
+    auto getExecutor() -> net::io_context::executor_type
+    {
+        return ioc.get_executor();
+    }
+    void cancel()
+    {
+        getLowestLayer().cancel();
+    }
+    auto& getLowestLayer()
+    {
+        return beast::get_lowest_layer(stream_);
+    }
 
   private:
+    void setTimeout(std::chrono::seconds seconds)
+    {
+        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
+        {
+            beast::get_lowest_layer(stream_).expires_after(seconds);
+        }
+    }
     net::io_context& ioc;
     ssl::stream<Stream> stream_;
 };

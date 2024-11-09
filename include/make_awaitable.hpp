@@ -16,6 +16,15 @@ using ReturnTuple = std::conditional_t<
 
 template <typename... Types>
 using AwaitableResult = net::awaitable<ReturnTuple<Types...>>;
+template <typename Handler, typename... Types>
+struct PromiseType
+{
+    Handler promise;
+    void setValues(Types... values)
+    {
+        promise(ReturnTuple<Types...>{std::move(values)...});
+    }
+};
 
 template <typename... Ret, typename HanlderFunc>
 auto make_awaitable_handler(HanlderFunc&& h)
@@ -28,20 +37,16 @@ auto make_awaitable_handler(HanlderFunc&& h)
                                   boost::system::error_code,
                                   std::tuple_element_t<0, std::tuple<Ret...>>>)
                 {
-                    auto callback =
-                        [handler = std::move(handler)](Ret... values) mutable {
-                            handler(ReturnTuple<Ret...>{std::move(values)...});
-                        };
-                    h(std::move(callback));
+                    PromiseType<decltype(handler), Ret...> promise{
+                        std::move(handler)};
+                    h(std::move(promise));
                 }
                 else
                 {
-                    auto callback = [handler = std::move(handler)](
-                                        boost::system::error_code ec,
-                                        Ret... values) mutable {
-                        handler(ReturnTuple<Ret...>{ec, std::move(values)...});
-                    };
-                    h(std::move(callback));
+                    PromiseType<decltype(handler), boost::system::error_code,
+                                Ret...>
+                        promise{std::move(handler)};
+                    h(std::move(promise));
                 }
             },
             mut_awaitable());

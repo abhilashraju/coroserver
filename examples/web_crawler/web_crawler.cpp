@@ -26,15 +26,16 @@ std::vector<std::string> extract_links(const std::string& html)
 
     return links;
 }
-auto getLinks(const std::string& uri, net::io_context& ioc, ssl::context& ctx,
-              int depth) -> net::awaitable<std::vector<std::string>>
+auto getLinksCallback(const std::string& uri, net::io_context& ioc,
+                      ssl::context& ctx,
+                      int depth) -> net::awaitable<std::vector<std::string>>
 {
     std::vector<std::string> links;
     if (depth == 0)
     {
         co_return links;
     }
-    WebClient<tcp::socket> client(ioc, ctx);
+    WebClient<beast::tcp_stream> client(ioc, ctx);
     client.withUrl(boost::urls::parse_uri(uri).value())
         .then([&links](auto&& response)
                   -> AwaitableResult<boost::system::error_code> {
@@ -58,12 +59,40 @@ auto getLinks(const std::string& uri, net::io_context& ioc, ssl::context& ctx,
         std::copy(links.begin(), links.end(), std::back_inserter(retLinks));
         for (const auto& link : links)
         {
-            auto newLinks = co_await getLinks(link, ioc, ctx, depth - 1);
+            auto newLinks =
+                co_await getLinksCallback(link, ioc, ctx, depth - 1);
             retLinks.insert(retLinks.end(), newLinks.begin(), newLinks.end());
         }
     }
 
     co_return retLinks;
+}
+
+auto getLinksSeq(const std::string& uri, net::io_context& ioc,
+                 ssl::context& ctx,
+                 int depth) -> net::awaitable<std::vector<std::string>>
+{
+    std::vector<std::string> links;
+    if (depth == 0)
+    {
+        co_return links;
+    }
+    WebClient<beast::tcp_stream> client(ioc, ctx);
+    client.withUrl(boost::urls::parse_uri(uri).value());
+    auto [ec, response] = co_await client.execute<Response>();
+    if (!ec)
+    {
+        for (const auto& link : extract_links(response.body()))
+        {
+            if (std::string_view(link).starts_with("https"))
+            {
+                links.push_back(link);
+                auto newLinks = co_await getLinksSeq(link, ioc, ctx, depth - 1);
+                links.insert(links.end(), newLinks.begin(), newLinks.end());
+            }
+        }
+    }
+    co_return links;
 }
 net::awaitable<void> crawl(net::io_context& ioc, const std::string& ep)
 {
@@ -73,7 +102,7 @@ net::awaitable<void> crawl(net::io_context& ioc, const std::string& ep)
     ctx.set_default_verify_paths();
     ctx.set_verify_mode(ssl::verify_none);
 
-    auto links = co_await getLinks(ep, ioc, ctx, 2);
+    auto links = co_await getLinksSeq(ep, ioc, ctx, 2);
     for (const auto& link : links)
     {
         LOG_INFO("Link: {}", link);

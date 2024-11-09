@@ -2,6 +2,7 @@
 #include "boost/url.hpp"
 #include "http_client.hpp"
 
+#include <map>
 template <typename T>
 concept WebClientThenFunction =
     requires(T t, Response response) {
@@ -18,9 +19,19 @@ concept WebClientOrElseFunction =
 template <typename Stream>
 struct WebClient
 {
+    struct TcpData
+    {
+        std::string host;
+        std::string port;
+    };
+    struct UnixData
+    {
+        std::string path;
+    };
     HttpClient<Stream> client;
-    std::string host;
-    std::string port{"443"};
+
+    std::variant<TcpData, UnixData> data;
+
     struct WebRequest
     {
         http::verb method{http::verb::get};
@@ -58,16 +69,27 @@ struct WebClient
     WebClient& operator=(const WebClient&) = delete;
     WebClient(WebClient&&) = default;
     WebClient& operator=(WebClient&&) = default;
+
     WebClient& withEndPoint(const std::string& h)
     {
-        host = h;
+        static_assert(std::is_same_v<Stream, beast::tcp_stream>);
+        std::get<TcpData>(data).host = h;
         return *this;
     }
     WebClient& withPort(const std::string& p)
     {
-        port = p;
+        static_assert(std::is_same_v<Stream, beast::tcp_stream>);
+        std::get<TcpData>(data).port = p;
         return *this;
     }
+
+    WebClient& withName(const std::string& p)
+    {
+        static_assert(std::is_same_v<Stream, unix_domain::socket>);
+        std::get<UnixData>(data).path = p;
+        return *this;
+    }
+
     WebClient& withRetries(int maxRetries)
     {
         retryPolicy.maxTries = maxRetries;
@@ -100,8 +122,16 @@ struct WebClient
     }
     WebClient& withUrl(boost::urls::url_view url)
     {
-        host = url.host();
-        port = url.port().empty() ? "443" : url.port();
+        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
+        {
+            withEndPoint(url.host());
+            withPort(url.port().empty() ? "443" : url.port());
+        }
+        else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
+        {
+            static_assert(0, "Unix domain socket does not support url view");
+        }
+
         request.target = url.path().empty() ? "/" : url.path();
         for (auto [key, value, ex] : url.params())
         {
@@ -109,6 +139,55 @@ struct WebClient
         }
         return *this;
     }
+
+    // AwaitableResult<boost::system::error_code>
+    //     connect_with_timeout(const std::string& host, const std::string&
+    //     port)
+    // {
+    //     net::steady_timer timer(client.getExecutor());
+    //     boost::system::error_code ec;
+    //     timer.expires_after(std::chrono::seconds(5)); // Set timeout duration
+
+    //     bool connect_finished = false;
+    //     bool timer_finished = false;
+
+    //     auto connect_task = [&]() -> net::awaitable<void> {
+    //         ec = co_await client.connect(host, port);
+    //         connect_finished = true;
+    //         if (!timer_finished)
+    //         {
+    //             timer.cancel();
+    //         }
+    //     };
+
+    //     auto timer_task = [&]() -> net::awaitable<void> {
+    //         co_await timer.async_wait(
+    //             net::redirect_error(net::use_awaitable, ec));
+    //         timer_finished = true;
+    //         if (!connect_finished)
+    //         {
+    //             client.cancel();
+    //         }
+    //     };
+
+    //     co_spawn(co_await net::this_coro::executor, connect_task(),
+    //              net::detached);
+    //     co_spawn(co_await net::this_coro::executor, timer_task(),
+    //              net::detached);
+
+    //     while (!connect_finished && !timer_finished)
+    //     {
+    //         co_await net::post(co_await net::this_coro::executor,
+    //                            net::use_awaitable);
+    //     }
+
+    //     if (ec == net::error::operation_aborted)
+    //     {
+    //         co_return net::error::timed_out;
+    //     }
+
+    //     co_return ec;
+    // }
     AwaitableResult<boost::system::error_code> tryConnect()
     {
         if (isConnected)
@@ -118,8 +197,20 @@ struct WebClient
         boost::system::error_code ec{};
         for (int i = 0; i < retryPolicy.maxTries; i++)
         {
-            LOG_INFO("Trying {} connection to {}:{} ", i, host, port);
-            ec = co_await client.connect(host, port);
+            if (std::is_same_v<Stream, beast::tcp_stream>)
+            {
+                auto& tcpData = std::get<TcpData>(data);
+                LOG_INFO("Trying {} connection to {}:{} ", i, tcpData.host,
+                         tcpData.port);
+
+                ec = co_await client.connect(tcpData.host, tcpData.port);
+            }
+            else if (std::is_same_v<Stream, unix_domain::socket>)
+            {
+                auto& unixData = std::get<UnixData>(data);
+                LOG_INFO("Trying {} connection to {} ", i, unixData.path);
+                ec = co_await client.connect(unixData.path, "");
+            }
             if (!ec)
             {
                 co_return ec;
@@ -127,12 +218,41 @@ struct WebClient
         }
         co_return ec;
     }
-    AwaitableResult<boost::system::error_code> execute()
+    template <typename... Ret>
+    AwaitableResult<Ret...> returnFailed(boost::system::error_code ec)
+    {
+        constexpr int size = sizeof...(Ret);
+        if constexpr (size > 1)
+        {
+            co_return std::make_tuple(ec, Response{});
+        }
+        else
+        {
+            co_return co_await orElseHandler(ec);
+        }
+    }
+    template <typename... Ret>
+    AwaitableResult<Ret...>
+        returnSuccess(boost::system::error_code ec, Response response)
+    {
+        constexpr int size = sizeof...(Ret);
+        if constexpr (size > 1)
+        {
+            co_return std::make_tuple(ec, std::move(response));
+        }
+        else
+        {
+            co_return co_await thenHandler(std::move(response));
+        }
+    }
+    template <typename... Ret>
+    AwaitableResult<boost::system::error_code, Ret...> execute()
     {
         auto [ec] = co_await tryConnect();
         if (ec)
         {
-            co_return co_await orElseHandler(ec);
+            co_return co_await returnFailed<boost::system::error_code, Ret...>(
+                ec);
         }
         std::string params;
         for (const auto& [key, value] : request.params)
@@ -144,7 +264,14 @@ struct WebClient
             params = "?" + params;
         }
         Request req(request.method, request.target + params, request.version);
-        req.set(http::field::host, host);
+        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
+        {
+            req.set(http::field::host, std::get<TcpData>(data).host);
+        }
+        else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
+        {
+            req.set(http::field::host, "localhost");
+        }
 
         for (const auto& [key, value] : request.headers)
         {
@@ -156,14 +283,16 @@ struct WebClient
         ec = co_await client.send_request(req);
         if (ec)
         {
-            co_return co_await orElseHandler(ec);
+            co_return co_await returnFailed<boost::system::error_code, Ret...>(
+                ec);
         }
         auto [ec1, response] = co_await client.receive_response();
         if (!ec1)
         {
-            co_return co_await thenHandler(std::move(response));
+            co_return co_await returnSuccess<boost::system::error_code, Ret...>(
+                ec1, std::move(response));
         }
-        co_return co_await orElseHandler(ec1);
+        co_return co_await returnFailed<boost::system::error_code, Ret...>(ec1);
     }
     WebClient& then(WebClientThenFunction auto handler)
     {
