@@ -116,6 +116,8 @@ net::awaitable<void> run_tcp_client(net::io_context& ioc, std::string_view ep,
 }
 
 ```
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/web_client/web_client.cpp#L47).
+
 ## Example: Web Client to Download Content from Local Unix Domain Socket Server
 
 Here is an example of a simple web client that downloads content from a local Unix domain socket server using the Reactor library:
@@ -142,6 +144,9 @@ net::awaitable<void> run_unix_client(net::io_context& ioc,
 }
 
 ```
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/unix_client/unix_client.cpp#L8).
+
+
 ## Example: Web Crawler to Extract Links from a Web Page
 
 Here is an example of a simple web crawler that extracts links from a web page using the Reactor library:
@@ -188,6 +193,8 @@ net::awaitable<void> crawl(net::io_context& ioc, const std::string& ep)
     }
 }
 ```
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/web_crawler/web_crawler.cpp#L71).
+
 ## Example: Concurrent Downloads Using `when_all`
 
 Here is an example of performing concurrent downloads using `when_all` with the Reactor library:
@@ -231,3 +238,4 @@ int main()
     return 0;
 }
 ```
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/when_all/when_all.cpp#L10).
