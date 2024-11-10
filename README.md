@@ -239,3 +239,94 @@ int main()
 }
 ```
 You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/when_all/when_all.cpp#L10).
+
+## Example: Simple HTTP Server
+
+Here is an example of a simple HTTP server using the Reactor library:
+
+```cpp
+int main()
+{
+    try
+    {
+        boost::asio::io_context io_context;
+
+        auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
+        constexpr std::string_view busName = "xyz.openbmc_project.usermanager";
+        constexpr std::string_view objPath = "/xyz/openbmc_project/user";
+        
+        boost::asio::ssl::context ssl_context(
+            boost::asio::ssl::context::sslv23);
+
+        // Load server certificate and private key
+        ssl_context.set_options(boost::asio::ssl::context::default_workarounds |
+                                boost::asio::ssl::context::no_sslv2 |
+                                boost::asio::ssl::context::single_dh_use);
+        
+        ssl_context.use_certificate_chain_file(
+            "/etc/ssl/private/server-cert.pem");
+        ssl_context.use_private_key_file("/etc/ssl/private/server-key.pem",
+                                         boost::asio::ssl::context::pem);
+        
+       
+        HttpRouter router;
+        router.setIoContext(io_context);
+        TcpStreamType acceptor(io_context, 8080, ssl_context);
+        // std::string socket_path = "/tmp/http_server.sock";
+        // UnixStreamType unixAcceptor(io_context, socket_path, ssl_context);
+        HttpServer server(io_context, acceptor, router);
+        
+        using variant = std::variant<bool, std::string>;
+        router.add_get_handler(
+            "/allmfaproperties",
+            [&](auto& req, auto& params) -> net::awaitable<Response> {
+                auto [ec, props] = co_await getAllProperties<variant>(
+                    *conn, busName.data(), objPath.data(), interface.data());
+                if (ec)
+                {
+                    LOG_ERROR("Error getting all properties: {}", ec.message());
+                    co_return make_internal_server_error(
+                        "Internal Server Error", req.version());
+                }
+                nlohmann::json jsonResponse;
+                for (auto& prop : props)
+                {
+                    std::visit(
+                        [&](auto val) { jsonResponse[prop.first] = val; },
+                        prop.second);
+                }
+
+                co_return make_success_response(jsonResponse, http::status::ok,
+                                                req.version());
+            });
+
+        router.add_post_handler(
+            "/createSecretKey",
+            [](Request& req,
+               const http_function& params) -> net::awaitable<Response> {
+                auto userName = params["userName"];
+                if (userName.empty())
+                {
+                    co_return make_bad_request_error("userName is required",
+                                                     req.version());
+                }
+                auto secretKey = createSecretKey(userName);
+                co_return make_success_response(secretKey, http::status::ok,
+                                                req.version());
+            });
+
+       
+
+        io_context.run();
+    }
+    catch (std::exception& e)
+    {
+        LOG_ERROR("Exception: {}", e.what());
+        return 1;
+    }
+
+    return 0;
+}
+
+```
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/server/sample_server.cpp#L100).

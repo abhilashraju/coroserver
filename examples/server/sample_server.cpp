@@ -1,5 +1,6 @@
 
 #include "http_server.hpp"
+#include "logger.hpp"
 #include "pam_functions.hpp"
 #include "sdbus_calls.hpp"
 
@@ -8,7 +9,6 @@
 #include <iostream>
 #include <optional>
 #include <string>
-
 int main()
 {
     try
@@ -63,8 +63,7 @@ int main()
                     "mfaenbled");
                 if (ec)
                 {
-                    std::cerr
-                        << "Error getting property: " << ec.message() << "\n";
+                    LOG_ERROR("Error getting property: {}", ec.message());
                     co_return make_internal_server_error(
                         "Internal Server Error", req.version());
                 }
@@ -81,8 +80,7 @@ int main()
                     *conn, busName.data(), objPath.data(), interface.data());
                 if (ec)
                 {
-                    std::cerr
-                        << "Error getting property: " << ec.message() << "\n";
+                    LOG_ERROR("Error getting all properties: {}", ec.message());
                     co_return make_internal_server_error(
                         "Internal Server Error", req.version());
                 }
@@ -107,8 +105,7 @@ int main()
                     "mfaenbled", params["mfaenbled"] == "true");
                 if (ec)
                 {
-                    std::cerr
-                        << "Error setting property: " << ec.message() << "\n";
+                    LOG_ERROR("Error setting property: {}", ec.message());
                     co_return make_internal_server_error(
                         "Internal Server Error", req.version());
                 }
@@ -159,8 +156,7 @@ int main()
                     *conn, data["path"], data["depth"], data["interfaces"]);
                 if (ec)
                 {
-                    std::cerr
-                        << "Error getting subtree: " << ec.message() << "\n";
+                    LOG_ERROR("Error getting subtree: {}", ec.message());
                     co_return make_internal_server_error(
                         "Internal Server Error", req.version());
                 }
@@ -177,7 +173,8 @@ int main()
     }
     catch (std::exception& e)
     {
-        std::cerr << "Exception: " << e.what() << std::endl;
+        LOG_ERROR("Exception: {}", e.what());
+        return 1;
     }
 
     return 0;
