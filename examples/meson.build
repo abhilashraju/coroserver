@@ -1,4 +1,6 @@
-subdir('client')
+subdir('web_client')
 subdir('server')
 subdir('web_crawler')
 subdir('test')
+subdir('when_all')
+subdir('unix_client')

@@ -4,10 +4,6 @@
 #include "logger.hpp"
 #include "webclient.hpp"
 
-#include <ranges>
-#include <regex>
-#include <vector>
-
 net::awaitable<void> run_tcp_client(net::io_context& ioc, std::string_view ep,
                                     std::string_view port)
 {
@@ -18,7 +14,7 @@ net::awaitable<void> run_tcp_client(net::io_context& ioc, std::string_view ep,
     ctx.set_verify_mode(ssl::verify_none);
     WebClient<beast::tcp_stream> client(ioc, ctx);
 
-    client.withEndPoint(ep.data())
+    client.withHost(ep.data())
         .withPort(port.data())
         .withMethod(http::verb::get)
         .withTarget("/")
@@ -58,9 +54,9 @@ int main(int argc, const char* argv[])
 
         if (!domain.has_value() && !name.has_value())
         {
-            LOG_ERROR("Domain or name is required");
             LOG_ERROR(
-                "Usage: client --domain|-d <domain end point> --name|-n <unix socket path name>");
+                "Usage: web_client --domain|-d <domain end point> --name|-n <unix socket path name>");
+            LOG_ERROR("Usage: web_client -d https://www.google.com -p 443");
 
             return EXIT_FAILURE;
         }

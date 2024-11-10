@@ -94,14 +94,6 @@ Here is an example of a simple web client that downloads content from `remote se
 
 ```cpp
 
-#include "boost/url.hpp"
-#include "command_line_parser.hpp"
-#include "logger.hpp"
-#include "webclient.hpp"
-#include <ranges>
-#include <regex>
-#include <vector>
-
 net::awaitable<void> run_tcp_client(net::io_context& ioc, std::string_view ep,
                                     std::string_view port)
 {
@@ -112,85 +104,8 @@ net::awaitable<void> run_tcp_client(net::io_context& ioc, std::string_view ep,
     ctx.set_verify_mode(ssl::verify_none);
     WebClient<beast::tcp_stream> client(ioc, ctx);
 
-    client.withEndPoint(ep.data())      //remote ip/domain name
-        .withPort(port.data())          //remote port
-        .withMethod(http::verb::get)    //method
-        .withTarget("/")                //target
-        .withRetries(3)                 //retries on failure
-        .withHeaders({{"User-Agent", "coro-client"}}); //headers if any
-    auto [ec, res] = co_await client.execute<Response>(); //execute the request
-
-    LOG_INFO("Error: {} {}", ec.message(), res.body());//print out the respose body
-}
-
-int main(int argc, const char* argv[])
-{
-    try
-    {
-        auto [domain, port] =
-            getArgs(parseCommandline(argc, argv), "--domain,-d", "--port,-p");
-
-        if (!domain.has_value() && !name.has_value())
-        {
-            LOG_ERROR("Domain or name is required");
-            LOG_ERROR(
-                "Usage: client --domain|-d <domain end point>");
-
-            return EXIT_FAILURE;
-        }
-        net::io_context ioc;
-
-        if (domain.has_value())
-        {
-            boost::urls::url url =
-                boost::urls::parse_uri(domain.value().data()).value();
-            net::co_spawn(ioc,
-                          run_tcp_client(ioc, url.host(), port.value_or("443")),
-                          net::detached);
-        }
-        if (name.has_value())
-        {
-            net::co_spawn(
-                ioc,
-                run_unix_client(ioc, name.value_or("/tmp/http_server.sock"),
-                                port.value_or("")),
-                net::detached);
-        }
-        ioc.run();
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("Exception: {}", e.what());
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
-}
-
-```
-## Example: Web Client to Download Content from Local Unix Domain Socket Server
-
-Here is an example of a simple web client that downloads content from a local Unix domain socket server using the Reactor library:
-
-```cpp
-#include "boost/url.hpp"
-#include "command_line_parser.hpp"
-#include "logger.hpp"
-#include "webclient.hpp"
-
-#include <ranges>
-#include <regex>
-#include <vector>
-
-net::awaitable<void> run_unix_client(net::io_context& ioc, std::string_view name)
-{
-    ssl::context ctx(ssl::context::tlsv12_client);
-
-    // Load the root certificates
-    ctx.set_default_verify_paths();
-    ctx.set_verify_mode(ssl::verify_none);
-    WebClient<unix_domain::socket> client(ioc, ctx);
-
-    client.withName(name)
+    client.withHost(ep.data())
+        .withPort(port.data())
         .withMethod(http::verb::get)
         .withTarget("/")
         .withRetries(3)
@@ -200,37 +115,119 @@ net::awaitable<void> run_unix_client(net::io_context& ioc, std::string_view name
     LOG_INFO("Error: {} {}", ec.message(), res.body());
 }
 
-int main(int argc, const char* argv[])
+```
+## Example: Web Client to Download Content from Local Unix Domain Socket Server
+
+Here is an example of a simple web client that downloads content from a local Unix domain socket server using the Reactor library:
+
+```cpp
+net::awaitable<void> run_unix_client(net::io_context& ioc,
+                                     std::string_view name)
 {
-    try
-    {
-        auto [name] =
-            getArgs(parseCommandline(argc, argv),
-                    "--name,-n");
+    ssl::context ctx(ssl::context::tlsv12_client);
 
-        if (!name.has_value())
-        {
-            
-            LOG_ERROR(
-                "Usage: client --name|-n <unix socket path name>");
+    // Load the root certificates
+    ctx.set_default_verify_paths();
+    ctx.set_verify_mode(ssl::verify_none);
+    WebClient<unix_domain::socket> client(ioc, ctx);
 
-            return EXIT_FAILURE;
-        }
-        net::io_context ioc;
-        net::co_spawn(
-            ioc,
-            run_unix_client(ioc, name.value_or("/tmp/http_server.sock")),
-            net::detached);
+    client.withName(name.data())
+        .withMethod(http::verb::get)
+        .withTarget("/")
+        .withRetries(3)
+        .withHeaders({{"User-Agent", "coro-client"}});
+    auto [ec, res] = co_await client.execute<Response>();
 
-        ioc.run();
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("Exception: {}", e.what());
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
+    LOG_INFO("Error: {} {}", ec.message(), res.body());
 }
 
 ```
+## Example: Web Crawler to Extract Links from a Web Page
 
+Here is an example of a simple web crawler that extracts links from a web page using the Reactor library:
+
+```cpp
+auto getLinks(const std::string& uri, net::io_context& ioc,
+                 ssl::context& ctx,
+                 int depth) -> net::awaitable<std::vector<std::string>>
+{
+    std::vector<std::string> links;
+    if (depth == 0)
+    {
+        co_return links;
+    }
+    WebClient<beast::tcp_stream> client(ioc, ctx);
+    client.withUrl(boost::urls::parse_uri(uri).value());
+    auto [ec, response] = co_await client.execute<Response>();
+    if (!ec)
+    {
+        for (const auto& link : extract_links(response.body()))
+        {
+            if (std::string_view(link).starts_with("https"))
+            {
+                links.push_back(link);
+                auto newLinks = co_await getLinks(link, ioc, ctx, depth - 1);
+                links.insert(links.end(), newLinks.begin(), newLinks.end());
+            }
+        }
+    }
+    co_return links;
+}
+net::awaitable<void> crawl(net::io_context& ioc, const std::string& ep)
+{
+    ssl::context ctx(ssl::context::tlsv12_client);
+
+    // Load the root certificates
+    ctx.set_default_verify_paths();
+    ctx.set_verify_mode(ssl::verify_none);
+
+    auto links = co_await getLinks(ep, ioc, ctx, 2);
+    for (const auto& link : links)
+    {
+        LOG_INFO("Link: {}", link);
+    }
+}
+```
+## Example: Concurrent Downloads Using `when_all`
+
+Here is an example of performing concurrent downloads using `when_all` with the Reactor library:
+
+```cpp
+net::awaitable<void> getAll(net::io_context& ioc, auto... tasks)
+{
+    auto [res1, res2] = co_await when_all(ioc, std::move(tasks)...);
+    LOG_INFO("Respnses: {}\n\n {}", res1.body(), res2.body());
+}
+int main()
+{
+    net::io_context ioc;
+    ssl::context ctx(ssl::context::tlsv12_client);
+
+    // Load the root certificates
+    ctx.set_default_verify_paths();
+    ctx.set_verify_mode(ssl::verify_none);
+    WebClient<unix_domain::socket> client(ioc, ctx);
+    auto task_maker = [&](std::string ep) {
+        return [ep, &ctx, &ioc]() -> net::awaitable<Response> {
+            WebClient<beast::tcp_stream> client(ioc, ctx);
+
+            client.withHost(ep)
+                .withPort("443")
+                .withMethod(http::verb::get)
+                .withTarget("/")
+                .withRetries(3)
+                .withHeaders({{"User-Agent", "coro-client"}});
+            auto [ec, res] = co_await client.execute<Response>();
+            co_return res;
+        };
+    };
+
+    net::co_spawn(
+        ioc,
+        getAll(ioc, task_maker("www.google.com"), task_maker("www.yahoo.com")),
+        net::detached);
+
+    ioc.run();
+    return 0;
+}
+```

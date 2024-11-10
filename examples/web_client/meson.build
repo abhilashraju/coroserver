@@ -1,8 +1,8 @@
 
 # Define the executable
 
-executable('client',
-  'sample_client.cpp',
+executable('web_client',
+  'web_client.cpp',
   dependencies: [coroserver_dep],
   install: true,
   install_dir: '/usr/bin'

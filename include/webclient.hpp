@@ -70,7 +70,7 @@ struct WebClient
     WebClient(WebClient&&) = default;
     WebClient& operator=(WebClient&&) = default;
 
-    WebClient& withEndPoint(const std::string& h)
+    WebClient& withHost(const std::string& h)
     {
         static_assert(std::is_same_v<Stream, beast::tcp_stream>);
         std::get<TcpData>(data).host = h;
@@ -124,7 +124,7 @@ struct WebClient
     {
         if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
         {
-            withEndPoint(url.host());
+            withHost(url.host());
             withPort(url.port().empty() ? "443" : url.port());
         }
         else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
