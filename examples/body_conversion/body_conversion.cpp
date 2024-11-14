@@ -27,9 +27,9 @@ net::awaitable<void> run_unix_client(
         .withHeaders({{"User-Agent", "coro-client"}})
         // .withJsonBody(nlohmann::json({{"userName", "test"}}));
         .withBody(Person{"test", 20});
-    auto [ec, res] = co_await client.executeAndReturnAs<std::string>();
+    auto [ec, res] = co_await client.executeAndReturnAs<Person>();
 
-    LOG_INFO("Error: {} {}", ec.message(), res);
+    LOG_INFO("Error: {} {} {}", ec.message(), res.name, res.age);
 }
 
 int main(int argc, const char* argv[])
