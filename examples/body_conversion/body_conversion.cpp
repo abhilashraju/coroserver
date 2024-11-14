@@ -4,7 +4,12 @@
 #include "webclient.hpp"
 
 #include <vector>
-
+struct Person
+{
+    std::string name;
+    int age;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(Person, name, age)
+};
 net::awaitable<void> run_unix_client(
     net::io_context& ioc, std::string_view name, std::string_view target)
 {
@@ -16,13 +21,15 @@ net::awaitable<void> run_unix_client(
     WebClient<unix_domain::socket> client(ioc, ctx);
 
     client.withName(name.data())
-        .withMethod(http::verb::get)
+        .withMethod(http::verb::post)
         .withTarget(target.data())
         .withRetries(3)
-        .withHeaders({{"User-Agent", "coro-client"}});
-    auto [ec, res] = co_await client.execute<Response>();
+        .withHeaders({{"User-Agent", "coro-client"}})
+        // .withJsonBody(nlohmann::json({{"userName", "test"}}));
+        .withBody(Person{"test", 20});
+    auto [ec, res] = co_await client.executeAndReturnAs<std::string>();
 
-    LOG_INFO("Error: {} {}", ec.message(), res.body());
+    LOG_INFO("Error: {} {}", ec.message(), res);
 }
 
 int main(int argc, const char* argv[])

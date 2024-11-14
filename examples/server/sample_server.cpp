@@ -52,9 +52,9 @@ int main()
         std::remove(socket_path.c_str());
         HttpRouter router;
         router.setIoContext(io_context);
-        TcpStreamType acceptor(io_context, 8080, ssl_context);
-        // UnixStreamType unixAcceptor(io_context, socket_path, ssl_context);
-        HttpServer server(io_context, acceptor, router);
+        // TcpStreamType acceptor(io_context, 8080, ssl_context);
+        UnixStreamType unixAcceptor(io_context, socket_path, ssl_context);
+        HttpServer server(io_context, unixAcceptor, router);
         router.add_get_handler(
             "/mfaenabled",
             [&](auto& req, auto& params) -> net::awaitable<Response> {
@@ -112,6 +112,18 @@ int main()
                 nlohmann::json jsonResponse;
                 jsonResponse["satatus"] = "sucess";
                 co_return make_success_response(jsonResponse, http::status::ok,
+                                                req.version());
+            });
+        router.add_post_handler(
+            "/bodytest",
+            [&](auto& req, auto& params) -> net::awaitable<Response> {
+                net::steady_timer timer(io_context);
+
+                auto body = req.body();
+                nlohmann::json data;
+                data["name"] = "test";
+                data["age"] = 32;
+                co_return make_success_response(data, http::status::ok,
                                                 req.version());
             });
 

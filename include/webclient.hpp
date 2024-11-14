@@ -2,6 +2,8 @@
 #include "boost/url.hpp"
 #include "http_client.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <map>
 template <typename T>
 concept WebClientThenFunction =
@@ -56,6 +58,14 @@ struct WebClient
     bool isConnected{false};
     WebClient(net::io_context& ioc, ssl::context& ctx) : client(ioc, ctx)
     {
+        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
+        {
+            data = TcpData{};
+        }
+        else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
+        {
+            data = UnixData{};
+        }
         thenHandler = [](Response response)
             -> AwaitableResult<boost::system::error_code> {
             LOG_INFO("Response: {}", response.body());
@@ -113,6 +123,18 @@ struct WebClient
     WebClient& withBody(std::string b)
     {
         request.body = std::move(b);
+        return *this;
+    }
+    WebClient& withJsonBody(const nlohmann::json& b)
+    {
+        request.body = b.dump();
+        return *this;
+    }
+    template <typename TypeBody>
+    WebClient& withBody(const TypeBody& b)
+    {
+        nlohmann::json j = b;
+        request.body = j.dump();
         return *this;
     }
     WebClient& withVersion(int v)
@@ -245,6 +267,42 @@ struct WebClient
                 ec1, std::move(response));
         }
         co_return co_await returnFailed<boost::system::error_code, Ret...>(ec1);
+    }
+    template <typename RetType>
+    AwaitableResult<boost::system::error_code, RetType> executeAndReturnAs()
+    {
+        static_assert(!std::is_same_v<RetType, boost::system::error_code>,
+                      "Return type should not be boost::system::error_code");
+        auto [ec, response] = co_await execute<Response>();
+        if constexpr (std::is_same_v<RetType, Response>)
+        {
+            co_return std::make_tuple(ec, std::move(response));
+        }
+        else
+        {
+            if (!ec)
+            {
+                auto body = std::move(response.body());
+                if constexpr (std::is_same_v<RetType, std::string>)
+                {
+                    co_return std::make_tuple(ec, body);
+                }
+                try
+                {
+                    LOG_INFO("Body: {}", body);
+                    RetType val = nlohmann::json::parse(body);
+                    co_return std::make_tuple(ec, std::move(val));
+                }
+                catch (const std::exception& e)
+                {
+                    LOG_ERROR("Error parsing json: {}", e.what());
+                    co_return std::make_tuple(
+                        make_error_code(boost::system::errc::bad_message),
+                        RetType{});
+                }
+            }
+            co_return std::make_tuple(ec, RetType{});
+        }
     }
     WebClient& then(WebClientThenFunction auto handler)
     {
