@@ -238,6 +238,40 @@ int main()
     return 0;
 }
 ```
+## Example: Request and Response Body Conversion
+
+Here is an example of converting request and response bodies using the Reactor library:
+
+```cpp
+struct Person
+{
+    std::string name;
+    int age;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(Person, name, age)
+};
+net::awaitable<void> run_unix_client(
+    net::io_context& ioc, std::string_view name, std::string_view target)
+{
+    ssl::context ctx(ssl::context::tlsv12_client);
+
+    // Load the root certificates
+    ctx.set_default_verify_paths();
+    ctx.set_verify_mode(ssl::verify_none);
+    WebClient<unix_domain::socket> client(ioc, ctx);
+
+    client.withName(name.data())
+        .withMethod(http::verb::post)
+        .withTarget(target.data())
+        .withRetries(3)
+        .withHeaders({{"User-Agent", "coro-client"}})
+        .withBody(Person{"test", 20});
+    auto [ec, res] = co_await client.executeAndReturnAs<Person>();
+
+    LOG_INFO("Error: {} {} {}", ec.message(), res.name, res.age);
+}
+```
+
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/request_response_conversion/request_response_conversion.cpp#L10).
 You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/when_all/when_all.cpp#L10).
 
 ## Example: Simple HTTP Server
