@@ -272,7 +272,7 @@ net::awaitable<void> run_unix_client(
     LOG_INFO("Error: {} {} {}", ec.message(), res.name, res.age);
 }
 ```
-You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/when_all/when_all.cpp#L10).
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/body_conversion/body_conversion.cpp#L23).
 
 ## Example: Simple HTTP Server
 
@@ -363,4 +363,4 @@ int main()
 }
 
 ```
-You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/body_conversion/body_conversion.cpp#L23).
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/server/sample_server.cpp#L12).
