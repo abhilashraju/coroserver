@@ -238,6 +238,8 @@ int main()
     return 0;
 }
 ```
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/when_all/when_all.cpp#L10).
+
 ## Example: Request and Response Body Conversion
 
 Here is an example of converting request and response bodies using the Reactor library:
@@ -270,8 +272,6 @@ net::awaitable<void> run_unix_client(
     LOG_INFO("Error: {} {} {}", ec.message(), res.name, res.age);
 }
 ```
-
-You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/request_response_conversion/request_response_conversion.cpp#L10).
 You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/when_all/when_all.cpp#L10).
 
 ## Example: Simple HTTP Server
@@ -363,4 +363,4 @@ int main()
 }
 
 ```
-You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/server/sample_server.cpp#L100).
+You can find complete code in [Reactor Library Examples](https://github.com/abhilashraju/coroserver/blob/main/examples/body_conversion/body_conversion.cpp#L23).
