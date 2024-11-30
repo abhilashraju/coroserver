@@ -3,6 +3,7 @@
 #include "command_line_parser.hpp"
 #include "logger.hpp"
 #include "webclient.hpp"
+#include "when_all.hpp"
 
 #include <boost/asio/experimental/awaitable_operators.hpp>
 
@@ -23,12 +24,15 @@ std::vector<std::string> extract_links(const std::string& html)
         links.push_back(match[1].str());
         search_start = match.suffix().first;
     }
-
+    if (links.empty())
+    {
+        LOG_INFO("No links found in {}", html);
+    }
     return links;
 }
 auto getLinksCallback(const std::string& uri, net::io_context& ioc,
-                      ssl::context& ctx,
-                      int depth) -> net::awaitable<std::vector<std::string>>
+                      ssl::context& ctx, int depth)
+    -> net::awaitable<std::vector<std::string>>
 {
     std::vector<std::string> links;
     if (depth == 0)
@@ -69,8 +73,8 @@ auto getLinksCallback(const std::string& uri, net::io_context& ioc,
 }
 
 auto getLinksSeq(const std::string& uri, net::io_context& ioc,
-                 ssl::context& ctx,
-                 int depth) -> net::awaitable<std::vector<std::string>>
+                 ssl::context& ctx, int depth)
+    -> net::awaitable<std::vector<std::string>>
 {
     std::vector<std::string> links;
     if (depth == 0)
@@ -94,6 +98,46 @@ auto getLinksSeq(const std::string& uri, net::io_context& ioc,
     }
     co_return links;
 }
+
+auto getLinksParallel(const std::string& uri, net::io_context& ioc,
+                      ssl::context& ctx, int depth)
+    -> net::awaitable<std::vector<std::string>>
+{
+    std::vector<std::string> links;
+    if (depth == 0)
+    {
+        co_return links;
+    }
+    WebClient<beast::tcp_stream> client(ioc, ctx);
+    client.withUrl(boost::urls::parse_uri(uri).value());
+    auto [ec, response] = co_await client.execute<Response>();
+    if (!ec)
+    {
+        for (const auto& link : extract_links(response.body()))
+        {
+            if (std::string_view(link).starts_with("https"))
+            {
+                links.push_back(link);
+            }
+        }
+    }
+    using Tasks = std::function<net::awaitable<std::vector<std::string>>()>;
+    std::vector<Tasks> tasks;
+    for (const auto& link : links)
+    {
+        auto task = [link, &ioc, &ctx,
+                     depth]() -> net::awaitable<std::vector<std::string>> {
+            co_return co_await getLinksParallel(link, ioc, ctx, depth - 1);
+        };
+        tasks.push_back(std::move(task));
+    }
+    auto results = co_await when_all(ioc, tasks);
+    for (const auto& res : results)
+    {
+        links.insert(links.end(), res.begin(), res.end());
+    }
+    co_return links;
+}
 net::awaitable<void> crawl(net::io_context& ioc, const std::string& ep)
 {
     ssl::context ctx(ssl::context::tlsv12_client);
@@ -102,7 +146,7 @@ net::awaitable<void> crawl(net::io_context& ioc, const std::string& ep)
     ctx.set_default_verify_paths();
     ctx.set_verify_mode(ssl::verify_none);
 
-    auto links = co_await getLinksSeq(ep, ioc, ctx, 2);
+    auto links = co_await getLinksParallel(ep, ioc, ctx, 2);
     for (const auto& link : links)
     {
         LOG_INFO("Link: {}", link);

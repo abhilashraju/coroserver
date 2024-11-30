@@ -1,7 +1,7 @@
 
 executable('crawler',
   'web_crawler.cpp',
-  dependencies: [coroserver_dep],
+  dependencies: [reactor_dep],
   install: true,
   install_dir: '/usr/bin'
 )

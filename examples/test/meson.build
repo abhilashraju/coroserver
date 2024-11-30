@@ -3,7 +3,7 @@
 
 executable('testex',
   'test.cpp',
-  dependencies: [coroserver_dep],
+  dependencies: [reactor_dep],
   install: true,
   install_dir: '/usr/bin'
 )

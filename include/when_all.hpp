@@ -76,3 +76,31 @@ net::awaitable<
         ioc, std::index_sequence_for<Awaitables...>{},
         std::make_tuple(std::move(awaitables)...));
 }
+
+template <typename Awaitable>
+net::awaitable<
+    std::vector<typename std::invoke_result_t<Awaitable>::value_type>>
+    when_all(net::io_context& ioc, const std::vector<Awaitable>& awaitables)
+{
+    std::vector<typename std::invoke_result_t<Awaitable>::value_type> results(
+        awaitables.size());
+    std::atomic<int> counter(awaitables.size());
+    for (const auto& index : std::views::iota(0u, awaitables.size()))
+    {
+        net::co_spawn(
+            ioc,
+            [index, &results, &counter,
+             awaitable = awaitables[index]]() mutable -> net::awaitable<void> {
+                results[index] = co_await awaitable();
+                counter--;
+            },
+            net::detached);
+    }
+    // co_await net::use_future(all_done_future);
+    while (counter > 0)
+    {
+        co_await net::post(co_await net::this_coro::executor,
+                           net::use_awaitable);
+    }
+    co_return results;
+}

@@ -7,6 +7,15 @@ net::awaitable<void> getAll(net::io_context& ioc, auto... tasks)
     auto [res1, res2] = co_await when_all(ioc, std::move(tasks)...);
     LOG_INFO("Respnses: {}\n\n {}", res1.body(), res2.body());
 }
+net::awaitable<void> getAllResults(net::io_context& ioc, const auto& tasks)
+{
+    auto results = co_await when_all(ioc, tasks);
+    for (auto& res : results)
+    {
+        LOG_INFO("Print: {}\n\n", res);
+    }
+}
+
 int main()
 {
     net::io_context ioc;
@@ -36,6 +45,16 @@ int main()
         getAll(ioc, task_maker("www.google.com"), task_maker("www.yahoo.com")),
         net::detached);
 
+    auto printerTask = [](int i) {
+        return [i]() -> net::awaitable<int> {
+            net::steady_timer timer(co_await net::this_coro::executor);
+            timer.expires_after(std::chrono::seconds(2));
+            co_await timer.async_wait(net::use_awaitable);
+            co_return i;
+        };
+    };
+    std::vector tasks = {printerTask(1), printerTask(2), printerTask(3)};
+    net::co_spawn(ioc, getAllResults(ioc, tasks), net::detached);
     ioc.run();
     return 0;
 }
