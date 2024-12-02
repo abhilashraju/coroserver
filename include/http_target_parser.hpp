@@ -61,29 +61,25 @@ inline http_function parse_function(std::string_view target)
     auto index = target.find_last_of("/");
     if (index != std::string::npos)
     {
-        auto func = target.substr(0, index);
-        auto paramstring = target.substr(index, target.length() - index);
-        auto funcindex = paramstring.find_first_of("?");
-        if (funcindex != std::string::npos)
+        auto nameandparams = split(target, '?');
+        auto func = nameandparams[0];
+        if (nameandparams.size() == 1)
         {
-            auto params =
-                split(paramstring.substr(funcindex + 1,
-                                         paramstring.length() - funcindex),
-                      '&');
-            http_function::parameters parampairs;
-            for (auto& p : params)
-            {
-                auto pairs = split(p, '=');
-                parampairs.emplace_back(pairs[0], pairs[1]);
-            }
-            return http_function{
-                to_string(func) + to_string(paramstring.substr(0, funcindex)),
-                std::move(parampairs)};
+            return http_function{to_string(func), http_function::parameters{}};
         }
-        return http_function{to_string(target), http_function::parameters{}};
+        auto paramstring = nameandparams[1];
+        auto params = split(paramstring, '&');
+        http_function::parameters parampairs;
+        for (auto& p : params)
+        {
+            auto pairs = split(p, '=');
+            parampairs.emplace_back(pairs[0], pairs[1]);
+        }
+        return http_function{to_string(func), std::move(parampairs)};
     }
-    return http_function{};
+    return http_function{to_string(target), http_function::parameters{}};
 }
+
 void extract_params_from_path(http_function& func,
                               const std::string& handlerfuncname,
                               const std::string& pathfuncname)

@@ -14,8 +14,8 @@ template <typename... RetTypes, typename... InputArgs>
 inline auto awaitable_dbus_method_call(
     sdbusplus::asio::connection& conn, const std::string& service,
     const std::string& objpath, const std::string& interf,
-    const std::string& method,
-    const InputArgs&... a) -> AwaitableResult<RetTypes...>
+    const std::string& method, const InputArgs&... a)
+    -> AwaitableResult<RetTypes...>
 {
     auto h = make_awaitable_handler<RetTypes...>([&](auto promise) {
         conn.async_method_call(
@@ -93,6 +93,189 @@ inline AwaitableResult<SubTreeType>
             "xyz.openbmc_project.ObjectMapper",
             "/xyz/openbmc_project/object_mapper",
             "xyz.openbmc_project.ObjectMapper", "GetSubTree", path, depth,
+            interfaces);
+    });
+    co_return co_await h();
+}
+
+template <typename Dict>
+inline AwaitableResult<Dict>
+    getObjects(sdbusplus::asio::connection& bus, const std::string& path,
+               const std::vector<std::string>& interfaces = {})
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetObject", path, interfaces);
+    });
+    co_return co_await h();
+}
+template <typename Dict>
+inline AwaitableResult<Dict>
+    getSubTreePaths(sdbusplus::asio::connection& bus, const std::string& path,
+                    int depth, const std::vector<std::string>& interfaces = {})
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths", path, depth,
+            interfaces);
+    });
+    co_return co_await h();
+}
+template <typename Dict>
+inline AwaitableResult<Dict>
+    getAssociatedSubTree(sdbusplus::asio::connection& bus,
+                         const sdbusplus::message::object_path& associatedPath,
+                         const sdbusplus::message::object_path& path, int depth,
+                         const std::vector<std::string>& interfaces = {})
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetAssociatedSubTree",
+            associatedPath, path, depth, interfaces);
+    });
+    co_return co_await h();
+}
+
+template <typename Dict>
+inline AwaitableResult<Dict> getAssociatedSubTreePaths(
+    sdbusplus::asio::connection& bus,
+    const sdbusplus::message::object_path& associatedPath,
+    const sdbusplus::message::object_path& path, int32_t depth,
+    const std::vector<std::string>& interfaces = {})
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetAssociatedSubTreePaths",
+            associatedPath, path, depth, interfaces);
+    });
+    co_return co_await h();
+}
+
+template <typename Dict>
+inline AwaitableResult<Dict> getAssociatedSubTreeById(
+    sdbusplus::asio::connection& bus, const std::string& id,
+    const std::string& path,
+    std::span<const std::string_view> subtreeInterfaces,
+    std::string_view association,
+    const std::vector<std::string>& endpointInterfaces = {})
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetAssociatedSubTreeById", id,
+            path, subtreeInterfaces, association, endpointInterfaces);
+    });
+    co_return co_await h();
+}
+
+template <typename Dict>
+inline AwaitableResult<Dict> getAssociatedSubTreePathsById(
+    sdbusplus::asio::connection& bus, const std::string& id,
+    const std::string& path,
+    std::span<const std::string_view> subtreeInterfaces,
+    std::string_view association,
+    const std::vector<std::string>& endpointInterfaces)
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetAssociatedSubTreePathsById",
+            id, path, subtreeInterfaces, association, endpointInterfaces);
+    });
+    co_return co_await h();
+}
+
+template <typename Dict>
+inline AwaitableResult<Dict>
+    getDbusObject(sdbusplus::asio::connection& bus, const std::string& path,
+                  const std::vector<std::string>& interfaces = {})
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetObject", path, interfaces);
+    });
+    co_return co_await h();
+}
+
+template <typename Dict>
+inline AwaitableResult<Dict> getAssociationEndPoints(
+    sdbusplus::asio::connection& bus, const std::string& path)
+{
+    co_return co_await getProperty<Dict>(
+        bus, "xyz.openbmc_project.ObjectMapper", path,
+        "xyz.openbmc_project.Association", "endpoints");
+}
+
+template <typename Dict>
+inline AwaitableResult<Dict> getManagedObjects(
+    sdbusplus::asio::connection& bus, const std::string& service,
+    const sdbusplus::message::object_path& path)
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            service, path, "org.freedesktop.DBus.ObjectManager",
+            "GetManagedObjects");
+    });
+    co_return co_await h();
+}
+template <typename Dict>
+inline AwaitableResult<Dict>
+    getAncestors(sdbusplus::asio::connection& bus, const std::string& path,
+                 const std::vector<std::string>& interfaces = {})
+{
+    auto h = make_awaitable_handler<Dict>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           Dict dict) mutable {
+                promise.setValues(ec, std::move(dict));
+            },
+            "xyz.openbmc_project.ObjectMapper",
+            "/xyz/openbmc_project/object_mapper",
+            "xyz.openbmc_project.ObjectMapper", "GetAncestors", path,
             interfaces);
     });
     co_return co_await h();
