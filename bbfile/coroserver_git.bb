@@ -50,6 +50,6 @@ do_install() {
 FILES_${PN} = "${bindir}/* ${sysconfdir}/*"
 
 # Enable wrap-based subproject downloading
-EXTRA_OEMESON += "-Dwrap_mode=forcefallback"
+#EXTRA_OEMESON += "-Dwrap_mode=forcefallback"
 
 

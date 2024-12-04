@@ -28,6 +28,8 @@ struct DbusHandlers
         router.add_get_handler(
             "/getAssociatedSubTree",
             std::bind_front(&DbusHandlers::getAssociatedSubTree, this));
+        router.add_get_handler(
+            "/introspect", std::bind_front(&DbusHandlers::introspect, this));
     }
 
     net::awaitable<Response> getSubTree(Request& req,
@@ -228,5 +230,26 @@ struct DbusHandlers
         nlohmann::json jsonResponse = toJson(object);
         co_return make_success_response(jsonResponse, http::status::ok,
                                         req.version());
+    }
+    net::awaitable<Response> introspect(Request& req,
+                                        const http_function& params)
+    {
+        nlohmann::json data = nlohmann::json::parse(req.body(), nullptr, false);
+
+        if (data.is_discarded())
+        {
+            co_return make_bad_request_error("Invalid JSON", req.version());
+        }
+
+        auto [ec, introspection] = co_await ::introspect(
+            conn, data["service"], toDbusPath(data["path"]));
+        if (ec)
+        {
+            LOG_ERROR("Error introspecting: {}", ec.message());
+            co_return make_internal_server_error("Internal Server Error",
+                                                 req.version());
+        }
+        co_return make_success_response(xmlToJson(introspection),
+                                        http::status::ok, req.version());
     }
 };

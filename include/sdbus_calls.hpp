@@ -280,3 +280,18 @@ inline AwaitableResult<Dict>
     });
     co_return co_await h();
 }
+
+inline AwaitableResult<std::string>
+    introspect(sdbusplus::asio::connection& bus, const std::string& service,
+               const sdbusplus::message::object_path& path)
+{
+    auto h = make_awaitable_handler<std::string>([&](auto promise) {
+        bus.async_method_call(
+            [promise = std::move(promise)](boost::system::error_code ec,
+                                           std::string str) mutable {
+                promise.setValues(ec, std::move(str));
+            },
+            service, path, "org.freedesktop.DBus.Introspectable", "Introspect");
+    });
+    co_return co_await h();
+}

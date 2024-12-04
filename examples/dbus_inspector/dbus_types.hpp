@@ -1,7 +1,11 @@
 #pragma once
 #include "sdbus_calls.hpp"
 
+#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/xml_parser.hpp>
 #include <nlohmann/json.hpp>
+
+#include <sstream>
 using DbusVariantType = std::variant<
     std::vector<std::tuple<std::string, std::string, std::string>>,
     std::vector<std::string>, std::vector<double>, std::string, int64_t,
@@ -137,4 +141,29 @@ inline nlohmann::json toJson(const ManagedObjectType& objects)
 inline sdbusplus::message::object_path toDbusPath(const std::string& path)
 {
     return sdbusplus::message::object_path(path);
+}
+inline nlohmann::json xmlToJson(const std::string& xml_string)
+{
+    boost::property_tree::ptree pt;
+    std::istringstream xml_stream(xml_string);
+    boost::property_tree::read_xml(xml_stream, pt);
+
+    auto ptree_to_json =
+        [](auto treetoJson,
+           const boost::property_tree::ptree& pt) -> nlohmann::json {
+        nlohmann::json json;
+        for (const auto& node : pt)
+        {
+            if (node.second.empty())
+            {
+                json[node.first] = node.second.data();
+            }
+            else
+            {
+                json[node.first] = treetoJson(treetoJson, node.second);
+            }
+        }
+        return json;
+    };
+    return ptree_to_json(ptree_to_json, pt);
 }
