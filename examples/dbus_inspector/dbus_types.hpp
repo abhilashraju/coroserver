@@ -1,4 +1,5 @@
 #pragma once
+#include "logger.hpp"
 #include "sdbus_calls.hpp"
 
 #include <boost/property_tree/ptree.hpp>
@@ -154,9 +155,32 @@ inline nlohmann::json xmlToJson(const std::string& xml_string)
         nlohmann::json json;
         for (const auto& node : pt)
         {
-            if (node.second.empty())
+            if (node.first == "<xmlattr>")
             {
-                json[node.first] = node.second.data();
+                for (const auto& attr : node.second)
+                {
+                    json["@" + attr.first] = attr.second.data();
+                }
+            }
+            else if (node.first == "<xmlcomment>")
+            {
+                json["#comment"] = node.second.data();
+            }
+            else if (node.first == "<xmltext>")
+            {
+                json = node.second.data();
+            }
+            else if (node.second.size() > 1 &&
+                     node.second.front().first == node.second.back().first)
+            {
+                LOG_INFO("Array: {}", node.second.size());
+                nlohmann::json jsonArray = nlohmann::json::array();
+                for (const auto& arrayNode : node.second)
+                {
+                    jsonArray.push_back(
+                        treetoJson(treetoJson, arrayNode.second));
+                }
+                json[node.first] = jsonArray;
             }
             else
             {

@@ -30,6 +30,12 @@ struct DbusHandlers
             std::bind_front(&DbusHandlers::getAssociatedSubTree, this));
         router.add_get_handler(
             "/introspect", std::bind_front(&DbusHandlers::introspect, this));
+        router.add_get_handler(
+            "/getProperty",
+            std::bind_front(&DbusHandlers::getDbusProperty, this));
+        router.add_post_handler(
+            "/setProperty",
+            std::bind_front(&DbusHandlers::setDbusProperty, this));
     }
 
     net::awaitable<Response> getSubTree(Request& req,
@@ -249,7 +255,115 @@ struct DbusHandlers
             co_return make_internal_server_error("Internal Server Error",
                                                  req.version());
         }
+        LOG_INFO("introspected {}", introspection);
         co_return make_success_response(xmlToJson(introspection),
                                         http::status::ok, req.version());
+    }
+
+    template <typename T>
+    static net::awaitable<boost::system::error_code> setProperty(
+        sdbusplus::asio::connection& conn, const std::string& service,
+        const std::string& path, const std::string& interface,
+        const std::string& property, const nlohmann::json& jValue)
+    {
+        T value = jValue;
+        auto [ec] = co_await ::setProperty(conn, service, path, interface,
+                                           property, value);
+        co_return ec;
+    }
+    using PropertySetter =
+        std::function<net::awaitable<boost::system::error_code>(
+            sdbusplus::asio::connection& conn, const std::string& service,
+            const std::string& path, const std::string& interface,
+            const std::string& property, const nlohmann::json& jValue)>;
+    std::map<std::string, PropertySetter> propertySetters = {
+        {"b", &DbusHandlers::setProperty<bool>},
+        {"i", &DbusHandlers::setProperty<int>},
+        {"s", &DbusHandlers::setProperty<std::string>},
+        {"ai", &DbusHandlers::setProperty<std::vector<int>>},
+        {"as", &DbusHandlers::setProperty<std::vector<std::string>>},
+    };
+    net::awaitable<Response> setDbusProperty(Request& req,
+                                             const http_function& params)
+    {
+        nlohmann::json data = nlohmann::json::parse(req.body(), nullptr, false);
+
+        if (data.is_discarded())
+        {
+            co_return make_bad_request_error("Invalid JSON", req.version());
+        }
+        std::string signature = data["signature"];
+        if (propertySetters.contains(signature))
+        {
+            auto setter = propertySetters[signature];
+            auto ec = co_await setter(conn, data["service"], data["path"],
+                                      data["interface"], data["property"],
+                                      data["value"]);
+            if (ec)
+            {
+                LOG_ERROR("Error setting DBus property: {}", ec.message());
+                co_return make_internal_server_error("Internal Server Error",
+                                                     req.version());
+            }
+            nlohmann::json jsonResponse;
+            jsonResponse["status"] = "success";
+            co_return make_success_response(jsonResponse, http::status::ok,
+                                            req.version());
+        }
+
+        co_return make_bad_request_error("Unsupported signature type",
+                                         req.version());
+    }
+
+    using PropertyGetter = std::function<net::awaitable<nlohmann::json>(
+        sdbusplus::asio::connection& conn, const std::string& service,
+        const std::string& path, const std::string& interface,
+        const std::string& property)>;
+    template <typename T>
+    static net::awaitable<nlohmann::json>
+        getProperty(sdbusplus::asio::connection& conn,
+                    const std::string& service, const std::string& path,
+                    const std::string& interface, const std::string& property)
+    {
+        auto [ec, value] =
+            co_await ::getProperty<T>(conn, service, path, interface, property);
+        nlohmann::json ret;
+        if (ec)
+        {
+            co_return ret;
+        }
+        ret["property"] = value;
+        co_return ret;
+    }
+    std::map<std::string, PropertyGetter> propertyGetters = {
+        {"b", &DbusHandlers::getProperty<bool>},
+        {"i", &DbusHandlers::getProperty<int>},
+        {"s", &DbusHandlers::getProperty<std::string>},
+        {"ai", &DbusHandlers::getProperty<std::vector<int>>},
+        {"as", &DbusHandlers::getProperty<std::vector<std::string>>}};
+    net::awaitable<Response> getDbusProperty(Request& req,
+                                             const http_function& params)
+    {
+        nlohmann::json data = nlohmann::json::parse(req.body(), nullptr, false);
+
+        if (data.is_discarded())
+        {
+            co_return make_bad_request_error("Invalid JSON", req.version());
+        }
+        std::string signature = data["signature"];
+        if (propertyGetters.contains(signature))
+        {
+            auto getter = propertyGetters[signature];
+            auto result = co_await getter(conn, data["service"], data["path"],
+                                          data["interface"], data["property"]);
+            if (result.empty())
+            {
+                LOG_ERROR("Error getting DBus property");
+                co_return make_internal_server_error("Internal Server Error",
+                                                     req.version());
+            }
+            co_return make_success_response(result, http::status::ok,
+                                            req.version());
+        }
     }
 };

@@ -109,7 +109,13 @@ auto getLinksParallel(const std::string& uri, net::io_context& ioc,
         co_return links;
     }
     WebClient<beast::tcp_stream> client(ioc, ctx);
-    client.withUrl(boost::urls::parse_uri(uri).value());
+    auto uri_view = boost::urls::parse_uri(uri);
+    if (!uri_view)
+    {
+        LOG_ERROR("Invalid URI: {}", uri);
+        co_return links;
+    }
+    client.withUrl(uri_view.value());
     auto [ec, response] = co_await client.execute<Response>();
     if (!ec)
     {

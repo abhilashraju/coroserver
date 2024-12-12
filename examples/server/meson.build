@@ -1,7 +1,6 @@
 
 
 # Define the executable
-sdbusplus_dep = dependency('sdbusplus', required: true, include_type: 'system')
 executable('coroserver',
   'sample_server.cpp',
   dependencies: [reactor_dep,sdbusplus_dep],
