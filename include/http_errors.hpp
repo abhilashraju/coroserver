@@ -1,4 +1,6 @@
 #pragma once
+#include "beastdefs.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <exception>

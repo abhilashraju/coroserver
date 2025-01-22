@@ -1,30 +1,7 @@
 #pragma once
 #include "beastdefs.hpp"
-#include "make_awaitable.hpp"
+#include "tcp_client.hpp"
 
-#include <boost/asio/steady_timer.hpp>
-
-#include <chrono>
-using namespace std::chrono_literals;
-inline AwaitableResult<net::ip::tcp::resolver::results_type>
-    awaitable_resolve(typename net::ip::tcp::resolver& resolver,
-                      const std::string& host, const std::string& port)
-{
-    auto h = make_awaitable_handler<net::ip::tcp::resolver::results_type>(
-        [&](auto promise) {
-            // resolver.async_resolve(
-            //     host, port,
-            //     [handler = std::move(handler)](
-            //         boost::system::error_code ec,
-            //         net::ip::tcp::resolver::results_type results) mutable {
-            //         handler(ec, std::move(results));
-            //     });
-            boost::system::error_code ec;
-            auto results = resolver.resolve(host, port, ec);
-            promise.setValues(ec, results);
-        });
-    co_return co_await h();
-}
 template <typename Stream>
 class HttpClient
 {

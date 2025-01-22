@@ -8,5 +8,5 @@ executable('coroserver',
   install_dir: '/usr/bin'
 )
 
-install_data('server-cert.pem', install_dir: '/etc/ssl/private')
-install_data('server-key.pem', install_dir: '/etc/ssl/private')
+install_data('server-cert.pem', install_dir: '/tmp')
+install_data('server-key.pem', install_dir: '/tmp')
