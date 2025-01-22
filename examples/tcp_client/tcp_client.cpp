@@ -20,7 +20,7 @@ int main(int argc, const char* argv[])
                 std::cerr << "Connect error: " << ec.message() << std::endl;
                 co_return;
             }
-            std::string message = "Hello, server!";
+            std::string message = "Hello, server!\r\n";
             size_t bytes{0};
             std::tie(ec, bytes) = co_await client.write(net::buffer(message));
             if (ec)

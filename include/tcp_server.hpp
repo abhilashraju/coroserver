@@ -21,13 +21,13 @@ class TcpServer
                 boost::asio::redirect_error(boost::asio::use_awaitable, ec));
             co_return std::make_pair(ec, bytes);
         }
-        AwaitableResult<std::size_t> readUntil(net::mutable_buffer data,
-                                               std::string_view delim)
+        AwaitableResult<std::size_t>
+            readUntil(boost::beast::flat_buffer& buffer, std::string_view delim)
         {
             boost::system::error_code ec;
-            auto bytes = co_await socket.async_read_until(
-                data, delim.data(),
-                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+            auto bytes = co_await net::async_read_until(
+                socket, buffer, delim,
+                boost::asio::redirect_error(net::use_awaitable, ec));
             co_return std::make_pair(ec, bytes);
         }
         typename Accepter::stream_type& socket;

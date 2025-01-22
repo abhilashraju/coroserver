@@ -22,35 +22,39 @@ struct SyncHandler
         std::cout << path << " " << status_map[status] << std::endl;
     }
     net::awaitable<boost::system::error_code>
-        parseAndHandle(std::string_view header)
+        parseAndHandle(std::string_view header, auto reader, auto writer)
     {
         auto command = header | stringSplitter(':');
         std::vector command_vec(command.begin(), command.end());
         if (command_vec.size() < 2)
         {
             LOG_ERROR("Invalid command: {}", header.data());
-            co_return boost::system::errc::parse_error;
+            co_return boost::system::errc::make_error_code(
+                boost::system::errc::invalid_argument);
         }
         auto handler_it = handler_table.find(command_vec[0]);
         if (handler_it != handler_table.end())
         {
-            co_await handler_it->second(command_vec[1]);
-            co_return boost::system::erro_code{};
+            co_await handler_it->second(command_vec[1], reader, writer);
+            co_return boost::system::error_code{};
         }
-        co_return boost::system::errc::not_found;
+        co_return boost::system::errc::make_error_code(
+            boost::system::errc::invalid_argument);
     }
 
     net::awaitable<void> operator()(auto reader, auto writer)
     {
-        std::array<char, 1024> data{0};
-        auto [ec, bytes] = co_await reader.readUntil(net::buffer(data), "\r\n");
+        boost::beast::flat_buffer buffer;
+        auto [ec, bytes] = co_await reader.readUntil(buffer, "\r\n");
         if (ec)
         {
-            std::cerr << "Error reading: " << ec.message() << std::endl;
+            LOG_DEBUG("Error reading: {}", ec.message());
             co_return;
         }
-        std::string_view data_view(data.data(), bytes);
-        auto ec = co_await parseAndHandle(data_view);
+        std::string data_view(static_cast<const char*>(buffer.data().data()),
+                              bytes);
+        LOG_DEBUG("Received: {}", data_view);
+        co_await parseAndHandle(data_view, reader, writer);
     }
 
   private:
