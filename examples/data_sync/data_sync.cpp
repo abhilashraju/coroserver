@@ -1,68 +1,56 @@
 #include "command_line_parser.hpp"
-#include "file_watcher.hpp"
-#include "tcp_server.hpp"
-struct SyncHandler
+#include "synchandler.hpp"
+
+#include <fstream>
+net::awaitable<void> fileDownloadHandler(const std::string& path,
+                                         SyncHandler::Streamer streamer)
 {
-    using TcpReader = TcpServer<TcpStreamType, SyncHandler>::Reader;
-    using TcpWriter = TcpServer<TcpStreamType, SyncHandler>::Writer;
-    auto stringSplitter(char delim = '/')
+    std::string filePath = "/tmp/" + path;
+    std::ofstream file(filePath, std::ios::binary);
+    if (!file.is_open())
     {
-        return std::views::split(delim) | std::views::transform([](auto&& sub) {
-                   return std::string(sub.begin(), sub.end());
-               });
+        LOG_ERROR("File not found: {}", filePath);
+        co_return;
     }
-
-    SyncHandler(FileWatcher& watcher) : watcher_(watcher) {}
-    void operator()(const std::string& path, FileWatcher::FileStatus status)
+    std::string header = std::format("Continue:{}\r\n", path);
+    co_await streamer.write(net::buffer(header));
+    std::string data;
+    while (true)
     {
-        std::map<FileWatcher::FileStatus, std::string> status_map{
-            {FileWatcher::FileStatus::created, "created"},
-            {FileWatcher::FileStatus::modified, "modified"},
-            {FileWatcher::FileStatus::erased, "erased"}};
-        std::cout << path << " " << status_map[status] << std::endl;
-    }
-    net::awaitable<boost::system::error_code>
-        parseAndHandle(std::string_view header, auto reader, auto writer)
-    {
-        auto command = header | stringSplitter(':');
-        std::vector command_vec(command.begin(), command.end());
-        if (command_vec.size() < 2)
-        {
-            LOG_ERROR("Invalid command: {}", header.data());
-            co_return boost::system::errc::make_error_code(
-                boost::system::errc::invalid_argument);
-        }
-        auto handler_it = handler_table.find(command_vec[0]);
-        if (handler_it != handler_table.end())
-        {
-            co_await handler_it->second(command_vec[1], reader, writer);
-            co_return boost::system::error_code{};
-        }
-        co_return boost::system::errc::make_error_code(
-            boost::system::errc::invalid_argument);
-    }
-
-    net::awaitable<void> operator()(auto reader, auto writer)
-    {
-        boost::beast::flat_buffer buffer;
-        auto [ec, bytes] = co_await reader.readUntil(buffer, "\r\n");
+        auto [ec, bytes] = co_await streamer.read(net::buffer(data));
         if (ec)
         {
-            LOG_DEBUG("Error reading: {}", ec.message());
-            co_return;
+            if (ec != boost::asio::error::eof)
+            {
+                LOG_ERROR("Error reading: {}", ec.message());
+            }
+            break;
         }
-        std::string data_view(static_cast<const char*>(buffer.data().data()),
-                              bytes);
-        LOG_DEBUG("Received: {}", data_view);
-        co_await parseAndHandle(data_view, reader, writer);
+        file.write(data.data(), bytes);
     }
-
-  private:
-    FileWatcher& watcher_;
-    using command_handler = std::function<net::awaitable<void>(
-        const std::string&, TcpReader, TcpWriter)>;
-    std::map<std::string, command_handler> handler_table;
-};
+    file.close();
+}
+net::awaitable<void> fileContinueHandler(const std::string& path,
+                                         SyncHandler::Streamer streamer)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open())
+    {
+        LOG_ERROR("File not found: {}", path);
+        co_return;
+    }
+    std::array<char, 1024> data;
+    while (true)
+    {
+        file.read(data.data(), data.size());
+        if (file.eof())
+        {
+            co_await streamer.write(net::buffer(data.data(), file.gcount()));
+            break;
+        }
+        co_await streamer.write(net::buffer(data));
+    }
+}
 int main(int argc, const char* argv[])
 {
     try
@@ -92,6 +80,8 @@ int main(int argc, const char* argv[])
         watcher.addToWatchRecursive(path.value().data());
 
         SyncHandler syncHandler(watcher);
+        syncHandler.addHandler("FileDownload", fileDownloadHandler);
+        syncHandler.addHandler("Continue", fileContinueHandler);
 
         TcpStreamType acceptor(io_context, 8080, ssl_context);
         TcpServer server(io_context, acceptor, syncHandler);

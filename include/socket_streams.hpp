@@ -4,6 +4,10 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
+
+#include <chrono>
+using namespace std::chrono_literals;
+
 struct TcpStreamType
 {
     using stream_type = boost::asio::ssl::stream<tcp::socket>;
@@ -67,4 +71,50 @@ struct UnixStreamType
     {
         return tcp::endpoint();
     }
+};
+
+template <typename StreamType>
+struct TimedStreamer
+{
+    TimedStreamer(StreamType& socket, net::steady_timer& timer) :
+        socket(socket), timer_(timer)
+    {}
+    AwaitableResult<std::size_t> read(net::mutable_buffer data)
+    {
+        setTimeout(30s);
+        boost::system::error_code ec;
+        auto bytes = co_await socket.async_read_some(
+            data, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        co_return std::make_pair(ec, bytes);
+    }
+    AwaitableResult<std::size_t> readUntil(boost::beast::flat_buffer& buffer,
+                                           std::string_view delim)
+    {
+        setTimeout(30s);
+        boost::system::error_code ec;
+        auto bytes = co_await net::async_read_until(
+            socket, buffer, delim,
+            boost::asio::redirect_error(net::use_awaitable, ec));
+        co_return std::make_pair(ec, bytes);
+    }
+    AwaitableResult<std::size_t> write(net::const_buffer data)
+    {
+        setTimeout(30s);
+        boost::system::error_code ec;
+        auto bytes = co_await socket.async_write_some(
+            data, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        co_return std::make_pair(ec, bytes);
+    }
+    void setTimeout(std::chrono::seconds timeout)
+    {
+        timer_.expires_after(timeout);
+        timer_.async_wait([this](const boost::system::error_code& ec) {
+            if (!ec)
+            {
+                socket.next_layer().cancel();
+            }
+        });
+    }
+    StreamType& socket;
+    net::steady_timer& timer_;
 };

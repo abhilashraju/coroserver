@@ -1,5 +1,6 @@
 #pragma once
 #include "make_awaitable.hpp"
+#include "socket_streams.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -7,15 +8,13 @@
 #include <boost/beast.hpp>
 #include <boost/system/error_code.hpp>
 
-#include <chrono>
 #include <iostream>
 #include <string>
 #include <utility>
 namespace net = boost::asio;
 namespace ssl = boost::asio::ssl;
 using tcp = boost::asio::ip::tcp;
-using namespace std::chrono_literals;
-using namespace std::chrono_literals;
+
 inline AwaitableResult<net::ip::tcp::resolver::results_type>
     awaitable_resolve(typename net::ip::tcp::resolver& resolver,
                       const std::string& host, const std::string& port)
@@ -49,13 +48,14 @@ class TcpClient
         auto [ec, results] = co_await awaitable_resolve(resolver_, host, port);
         if (ec)
             co_return ec;
-        setTimeout(30s);
+        TimedStreamer streamer(stream_, timer_);
+        streamer.setTimeout(30s);
         co_await net::async_connect(
             stream_.next_layer(), results,
             net::redirect_error(net::use_awaitable, ec));
         if (ec)
             co_return ec;
-
+        streamer.setTimeout(30s);
         co_await stream_.async_handshake(
             ssl::stream_base::client,
             net::redirect_error(net::use_awaitable, ec));
@@ -64,34 +64,21 @@ class TcpClient
 
     AwaitableResult<std::size_t> write(net::const_buffer data)
     {
-        setTimeout(30s);
-        boost::system::error_code ec;
-        auto bytes = co_await stream_.async_write_some(
-            net::buffer(data), net::redirect_error(net::use_awaitable, ec));
-        co_return std::make_tuple(ec, bytes);
+        TimedStreamer streamer(stream_, timer_);
+        co_return co_await streamer.write(data);
     }
 
     AwaitableResult<std::size_t> read(net::mutable_buffer buffer)
     {
-        setTimeout(30s);
-        boost::system::error_code ec;
-        std::size_t bytes = co_await stream_.async_read_some(
-            buffer, net::redirect_error(net::use_awaitable, ec));
-        co_return std::make_tuple(ec, bytes);
+        TimedStreamer streamer(stream_, timer_);
+        co_return co_await streamer.read(buffer);
+    }
+    ssl::stream<tcp::socket>& stream()
+    {
+        return stream_;
     }
 
   private:
-    void setTimeout(std::chrono::seconds timeout)
-    {
-        timer_.expires_after(timeout);
-        timer_.async_wait([this](const boost::system::error_code& ec) {
-            if (!ec)
-            {
-                stream_.next_layer().cancel();
-            }
-        });
-    }
-
     tcp::resolver resolver_;
     ssl::stream<tcp::socket> stream_;
     net::steady_timer timer_;
