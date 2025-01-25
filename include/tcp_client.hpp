@@ -37,7 +37,7 @@ inline AwaitableResult<net::ip::tcp::resolver::results_type>
 class TcpClient
 {
   public:
-    TcpClient(net::io_context& io_context, ssl::context& ssl_context) :
+    TcpClient(net::any_io_executor io_context, ssl::context& ssl_context) :
         resolver_(io_context), stream_(io_context, ssl_context),
         timer_(io_context)
     {}
@@ -64,18 +64,20 @@ class TcpClient
 
     AwaitableResult<std::size_t> write(net::const_buffer data)
     {
-        TimedStreamer streamer(stream_, timer_);
-        co_return co_await streamer.write(data);
+        co_return co_await streamer().write(data);
     }
 
     AwaitableResult<std::size_t> read(net::mutable_buffer buffer)
     {
-        TimedStreamer streamer(stream_, timer_);
-        co_return co_await streamer.read(buffer);
+        co_return co_await streamer().read(buffer);
     }
     ssl::stream<tcp::socket>& stream()
     {
         return stream_;
+    }
+    TimedStreamer<ssl::stream<tcp::socket>> streamer()
+    {
+        return TimedStreamer(stream_, timer_);
     }
 
   private:

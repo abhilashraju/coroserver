@@ -9,9 +9,8 @@
 template <typename Accepter, typename Router>
 class TcpServer
 {
-    using TimedStreamer = TimedStreamer<typename Accepter::stream_type>;
-
   public:
+    using Streamer = TimedStreamer<typename Accepter::stream_type>;
     TcpServer(boost::asio::io_context& io_context, Accepter& accepter,
               Router& router) :
         context(io_context), acceptor_(accepter), router_(router),
@@ -50,7 +49,7 @@ class TcpServer
         co_await socket->async_handshake(boost::asio::ssl::stream_base::server,
                                          boost::asio::use_awaitable);
 
-        co_await router_(TimedStreamer(*socket, timer_));
+        co_await router_(Streamer(*socket, timer_));
     }
 
     boost::asio::io_context& context;

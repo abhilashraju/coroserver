@@ -13,7 +13,7 @@ int main(int argc, const char* argv[])
         io_context,
         [&io_context]() -> net::awaitable<void> {
             ssl::context ssl_context(ssl::context::sslv23_client);
-            TcpClient client(io_context, ssl_context);
+            TcpClient client(io_context.get_executor(), ssl_context);
             auto ec = co_await client.connect("127.0.0.1", "8080");
             if (ec)
             {

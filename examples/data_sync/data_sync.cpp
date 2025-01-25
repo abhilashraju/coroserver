@@ -1,23 +1,30 @@
 #include "command_line_parser.hpp"
 #include "synchandler.hpp"
 
+#include <filesystem>
 #include <fstream>
+namespace fs = std::filesystem;
 net::awaitable<void> fileDownloadHandler(const std::string& path,
                                          SyncHandler::Streamer streamer)
 {
-    std::string filePath = "/tmp/" + path;
+    fs::path filePath = "/tmp" + path;
+    if (!fs::exists(std::filesystem::path(filePath).parent_path()))
+    {
+        fs::create_directories(std::filesystem::path(filePath).parent_path());
+    }
     std::ofstream file(filePath, std::ios::binary);
     if (!file.is_open())
     {
-        LOG_ERROR("File not found: {}", filePath);
+        LOG_ERROR("File not found: {}", filePath.string());
         co_return;
     }
     std::string header = std::format("Continue:{}\r\n", path);
     co_await streamer.write(net::buffer(header));
-    std::string data;
+    std::array<char, 1024> data{0};
     while (true)
     {
-        auto [ec, bytes] = co_await streamer.read(net::buffer(data));
+        auto [ec, bytes] =
+            co_await streamer.read(net::buffer(data.data(), data.size()));
         if (ec)
         {
             if (ec != boost::asio::error::eof)
@@ -27,6 +34,7 @@ net::awaitable<void> fileDownloadHandler(const std::string& path,
             break;
         }
         file.write(data.data(), bytes);
+        std::fill(data.begin(), data.end(), 0);
     }
     file.close();
 }
@@ -55,10 +63,13 @@ int main(int argc, const char* argv[])
 {
     try
     {
-        auto [path] = getArgs(parseCommandline(argc, argv), "--path,-p");
-        if (!path.has_value())
+        reactor::getLogger().setLogLevel(reactor::LogLevel::DEBUG);
+        auto [path, port] =
+            getArgs(parseCommandline(argc, argv), "--dir,-d", "--port,-p");
+        if (!path.has_value() || !port.has_value())
         {
-            std::cerr << "Usage: data_sync --path <directory path>\n";
+            std::cerr
+                << "Usage: data_sync --path <directory path> --port <port no>\n";
             return 1;
         }
         boost::asio::io_context io_context;
@@ -80,10 +91,11 @@ int main(int argc, const char* argv[])
         watcher.addToWatchRecursive(path.value().data());
 
         SyncHandler syncHandler(watcher);
-        syncHandler.addHandler("FileDownload", fileDownloadHandler);
+        syncHandler.addHandler("FileModified", fileDownloadHandler);
         syncHandler.addHandler("Continue", fileContinueHandler);
 
-        TcpStreamType acceptor(io_context, 8080, ssl_context);
+        TcpStreamType acceptor(io_context, std::atoi(port.value().data()),
+                               ssl_context);
         TcpServer server(io_context, acceptor, syncHandler);
 
         boost::asio::co_spawn(io_context,

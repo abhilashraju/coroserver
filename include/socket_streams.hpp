@@ -1,6 +1,7 @@
 #pragma once
 #include "beastdefs.hpp"
 #include "logger.hpp"
+#include "make_awaitable.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
@@ -87,16 +88,45 @@ struct TimedStreamer
             data, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
         co_return std::make_pair(ec, bytes);
     }
-    AwaitableResult<std::size_t> readUntil(boost::beast::flat_buffer& buffer,
-                                           std::string_view delim)
+    // AwaitableResult<std::size_t> readUntil(boost::beast::flat_buffer& buffer,
+    //                                        std::string_view delim)
+    // {
+    //     setTimeout(30s);
+    //     boost::system::error_code ec;
+    //     auto bytes = co_await net::async_read_until(
+    //         socket, buffer, delim,
+    //         boost::asio::redirect_error(net::use_awaitable, ec));
+    //     co_return std::make_pair(ec, bytes);
+    // }
+    AwaitableResult<std::string> readUntil(const std::string& delim,
+                                           size_t max_size = 1024)
     {
-        setTimeout(30s);
-        boost::system::error_code ec;
-        auto bytes = co_await net::async_read_until(
-            socket, buffer, delim,
-            boost::asio::redirect_error(net::use_awaitable, ec));
-        co_return std::make_pair(ec, bytes);
+        std::string ret;
+        ret.reserve(max_size);
+        std::string data(1024, '\0');
+        while (ret.length() <= max_size - delim.length())
+        {
+            auto [ec, bytes] = co_await read(net::buffer(data));
+            if (ec)
+            {
+                if (ec != boost::asio::error::eof)
+                {
+                    LOG_DEBUG("Error reading: {}", ec.message());
+                }
+                co_return std::make_tuple(ec, std::move(ret));
+            }
+            ret.append(data.data(), bytes);
+            if (std::string_view{data.data(), bytes}.find(delim) !=
+                std::string::npos)
+            {
+                co_return std::make_tuple(boost::system::error_code{},
+                                          std::move(ret));
+            }
+            std::fill(data.begin(), data.end(), '\0');
+        }
+        co_return std::make_tuple(boost::system::error_code{}, std::move(ret));
     }
+
     AwaitableResult<std::size_t> write(net::const_buffer data)
     {
         setTimeout(30s);
