@@ -5,7 +5,7 @@
 #include <fstream>
 namespace fs = std::filesystem;
 net::awaitable<void> fileDownloadHandler(const std::string& path,
-                                         SyncHandler::Streamer streamer)
+                                         Streamer streamer)
 {
     fs::path filePath = "/tmp" + path;
     if (!fs::exists(std::filesystem::path(filePath).parent_path()))
@@ -39,7 +39,7 @@ net::awaitable<void> fileDownloadHandler(const std::string& path,
     file.close();
 }
 net::awaitable<void> fileContinueHandler(const std::string& path,
-                                         SyncHandler::Streamer streamer)
+                                         Streamer streamer)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open())
@@ -91,8 +91,8 @@ int main(int argc, const char* argv[])
         watcher.addToWatchRecursive(path.value().data());
 
         SyncHandler syncHandler(watcher);
-        syncHandler.addHandler("FileModified", fileDownloadHandler);
-        syncHandler.addHandler("Continue", fileContinueHandler);
+        addHandler("FileModified", fileDownloadHandler);
+        addHandler("Continue", fileContinueHandler);
 
         TcpStreamType acceptor(io_context, std::atoi(port.value().data()),
                                ssl_context);

@@ -1,4 +1,4 @@
-project('reactor', 'cpp', version: '1.0.0', default_options: ['cpp_std=c++20'])
+project('reactor', 'cpp', version: '1.0.0', default_options: ['cpp_std=c++23','cpp_args=-Wno-subobject-linkage'])
 
 # Find Boost dependency
 #boost_dep = dependency('boost', required: true)
