@@ -79,6 +79,19 @@ class TcpClient
     {
         return TimedStreamer(stream_, timer_);
     }
+    void close()
+    {
+        boost::system::error_code ec;
+        stream_.next_layer().close(ec);
+        if (ec)
+        {
+            LOG_ERROR("Error closing socket: {}", ec.message());
+        }
+    }
+    bool isOpen() const
+    {
+        return stream_.lowest_layer().is_open();
+    }
 
   private:
     tcp::resolver resolver_;

@@ -5,8 +5,10 @@
 #include "command_line_parser.hpp"
 #include "logger.hpp"
 
-int main()
+int main(int argc, const char* argv[])
 {
+    auto [port, cert] =
+        getArgs(parseCommandline(argc, argv), "--port,-p", "--cert,-c");
     net::io_context io_context;
     ssl::context ssl_context(ssl::context::sslv23_server);
 
@@ -14,9 +16,21 @@ int main()
     ssl_context.set_options(boost::asio::ssl::context::default_workarounds |
                             boost::asio::ssl::context::no_sslv2 |
                             boost::asio::ssl::context::single_dh_use);
-    ssl_context.use_certificate_chain_file("/tmp/server-cert.pem");
-    ssl_context.use_private_key_file("/tmp/server-key.pem",
-                                     boost::asio::ssl::context::pem);
+    if (cert)
+    {
+        ssl_context.use_certificate_chain_file(
+            cert.value().data() + std::string("/server-cert.pem"));
+        ssl_context.use_private_key_file(
+            cert.value().data() + std::string("/server-key.pem"),
+            boost::asio::ssl::context::pem);
+    }
+    else
+    {
+        ssl_context.use_certificate_chain_file("/tmp/server-cert.pem");
+        ssl_context.use_private_key_file("/tmp/server-key.pem",
+                                         boost::asio::ssl::context::pem);
+    }
+
     TcpStreamType acceptor(io_context, 8080, ssl_context);
     auto router = [](auto streamer) -> net::awaitable<void> {
         while (true)

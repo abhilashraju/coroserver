@@ -145,6 +145,19 @@ struct TimedStreamer
             }
         });
     }
+    void close()
+    {
+        boost::system::error_code ec;
+        socket.next_layer().close(ec);
+        if (ec)
+        {
+            LOG_ERROR("Error closing socket: {}", ec.message());
+        }
+    }
+    bool isOpen() const
+    {
+        return socket.next_layer().is_open();
+    }
     StreamType& socket;
     net::steady_timer& timer_;
 };
