@@ -117,7 +117,7 @@ struct TimedStreamer
             {
                 setTimeout(30s);
             }
-            auto [ec, bytes] = co_await read(net::buffer(data));
+            auto [ec, bytes] = co_await read(net::buffer(data), timeout);
             timer->cancel();
             if (ec)
             {

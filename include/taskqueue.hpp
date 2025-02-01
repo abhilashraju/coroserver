@@ -22,7 +22,7 @@ class TaskQueue
         {
             return available;
         }
-        TcpClient& get()
+        TcpClient& acquire()
         {
             available = false;
             return client;
@@ -69,7 +69,7 @@ class TaskQueue
     }
     net::awaitable<void> handleTask(NetworkTask netTask)
     {
-        auto steamer = netTask.client.get().get().streamer();
+        auto steamer = netTask.client.get().acquire().streamer();
         auto ec = co_await netTask.task(steamer);
         if (!ec)
         {
@@ -117,8 +117,14 @@ class TaskQueue
         co_await waitForTask();
 
         auto client = co_await getAvailableClient();
+
         if (client)
         {
+            if (taskHandlers.empty())
+            {
+                client.value().get().release();
+                co_return std::nullopt;
+            }
             auto message = std::move(taskHandlers.front());
             taskHandlers.pop_front();
             co_return NetworkTask{message, *client};
@@ -136,7 +142,7 @@ class TaskQueue
             {
                 if (client->isAvailable())
                 {
-                    client->get();
+                    client->acquire();
                     co_return std::ref(*client);
                 }
             }
@@ -154,7 +160,7 @@ class TaskQueue
             co_return freeclient;
         }
         auto client = std::make_unique<Client>(ioContext, sslContext);
-        auto ec = co_await tryConnect(client->get());
+        auto ec = co_await tryConnect(client->acquire());
         if (!ec)
         {
             auto clientToRet = std::ref(*client);
@@ -190,5 +196,5 @@ class TaskQueue
     net::ssl::context& sslContext;
     net::any_io_executor ioContext;
     int maxRetryCount{3};
-    size_t maxClients{3};
+    size_t maxClients{1};
 };

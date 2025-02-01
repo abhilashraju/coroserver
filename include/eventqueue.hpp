@@ -6,6 +6,28 @@
 #include <map>
 #include <set>
 
+inline AwaitableResult<size_t> readData(Streamer streamer,
+                                        net::mutable_buffer buffer)
+{
+    auto [ec, size] = co_await streamer.read(buffer, false);
+    if (ec)
+    {
+        LOG_ERROR("Error reading: {}", ec.message());
+        co_return std::make_pair(ec, size);
+    }
+    co_return std::make_pair(ec, size);
+}
+inline AwaitableResult<size_t> sendData(Streamer streamer,
+                                        net::const_buffer buffer)
+{
+    auto [ec, size] = co_await streamer.write(buffer, false);
+    if (ec)
+    {
+        LOG_ERROR("Error writing: {}", ec.message());
+        co_return std::make_pair(ec, size);
+    }
+    co_return std::make_pair(ec, size);
+}
 inline AwaitableResult<std::string> readHeader(Streamer streamer)
 {
     auto [ec, data] = co_await streamer.readUntil("\r\n", 1024, false);
@@ -15,8 +37,23 @@ inline AwaitableResult<std::string> readHeader(Streamer streamer)
         co_return std::make_pair(ec, data);
     }
     data.erase(data.length() - 2, 2);
+    LOG_INFO("Header: {}", data);
     co_return std::make_pair(ec, data);
 }
+
+inline AwaitableResult<size_t> sendHeader(Streamer streamer,
+                                          const std::string& data)
+{
+    co_await sendData(streamer, net::buffer(""));
+    std::string header = std::format("{}\r\n", data);
+    co_return co_await streamer.write(net::buffer(header), false);
+}
+net::awaitable<boost::system::error_code> sendDone(Streamer streamer)
+{
+    auto [ec, size] = co_await sendHeader(streamer, "Done");
+    co_return ec;
+}
+
 struct EventQueue
 {
     using EventProvider =
@@ -46,17 +83,20 @@ struct EventQueue
                    std::chrono::system_clock::now().time_since_epoch())
             .count();
     }
-    std::string getEventId(const std::string& event)
+    std::string getEventId(std::string_view event)
     {
-        return event.find(':') != std::string::npos
-                   ? event.substr(0, event.find(':'))
-                   : event;
+        if (event.find(':') != std::string::npos)
+        {
+            auto vw = event.substr(0, event.find(':'));
+            return std::string(vw);
+        }
+        return event.data();
     }
     net::awaitable<boost::system::error_code> sendEventHandler(
         uint64_t id, std::reference_wrapper<EventProvider> provider,
         const std::string& event, Streamer streamer)
     {
-        auto [ec, size] = co_await streamer.write(net::buffer(event));
+        auto [ec, size] = co_await streamer.write(net::buffer(event), false);
         if (ec)
         {
             LOG_ERROR("Failed to write to stream: {}", ec.message());
@@ -73,12 +113,15 @@ struct EventQueue
         }
         events.erase(id);
         ec = co_await provider.get()(streamer, header);
+
         if (ec)
         {
             LOG_ERROR("Failed to handle event ret:{} {}", header, ec.message());
             co_return ec;
         }
-        co_return boost::system::error_code{};
+        std::string done;
+        std::tie(ec, done) = co_await readHeader(streamer);
+        co_return ec;
     }
     void resendEvent(uint64_t id,
                      std::reference_wrapper<EventProvider> provider)
@@ -105,7 +148,8 @@ struct EventQueue
     inline net::awaitable<boost::system::error_code>
         parseAndHandle(std::string_view header, Streamer streamer)
     {
-        auto handler_it = eventConsumers.find(header.data());
+        auto consumerId = getEventId(header);
+        auto handler_it = eventConsumers.find(consumerId);
         if (handler_it != eventConsumers.end())
         {
             auto ec = co_await handler_it->second(streamer, header.data());
@@ -114,18 +158,17 @@ struct EventQueue
                 LOG_ERROR("Failed to handle event: {}", ec.message());
                 co_return ec;
             }
-            co_return boost::system::error_code{};
+
+            auto [ec1, size] = co_await sendHeader(streamer, "Done");
+            co_return ec1;
         }
-        // std::string ret = std::string(header);
-        auto [ec, size] =
-            co_await streamer.write(net::buffer("ConsumerNotFound\r\n"));
+        auto [ec, size] = co_await sendHeader(streamer, "ConsumerNotFound");
         if (ec)
         {
             LOG_ERROR("Failed to write to stream: {}", ec.message());
             co_return ec;
         }
-        co_return boost::system::errc::make_error_code(
-            boost::system::errc::no_such_file_or_directory);
+        co_return co_await sendDone(streamer);
     }
     inline net::awaitable<boost::system::error_code> next(Streamer streamer)
     {
@@ -144,12 +187,7 @@ struct EventQueue
         while (true)
         {
             auto ec = co_await next(streamer);
-            if (ec == boost::system::errc::no_such_file_or_directory)
-            {
-                LOG_INFO("No Consumer found for event");
-                continue;
-            }
-            else if (ec == boost::asio::error::operation_aborted)
+            if (ec == boost::asio::error::operation_aborted)
             {
                 LOG_INFO("Operation Aborted");
                 continue;

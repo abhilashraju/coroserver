@@ -5,7 +5,9 @@
 #include "file_watcher.hpp"
 #include "logger.hpp"
 
+#include <filesystem>
 #include <fstream>
+namespace fs = std::filesystem;
 net::awaitable<boost::system::error_code>
     helloProvider(Streamer streamer, const std::string& eventReplay)
 {
@@ -44,6 +46,8 @@ struct FileSync
                 -> net::awaitable<boost::system::error_code> {
                 co_return co_await fileConsumer(streamer, event);
             });
+        boost::asio::co_spawn(io_context, watchFileChanges(watcher, *this),
+                              boost::asio::detached);
     }
     void operator()(const std::string& path, FileWatcher::FileStatus status)
     {
@@ -70,15 +74,16 @@ struct FileSync
             if (!file.is_open())
             {
                 LOG_ERROR("File not found: {}", path);
-                std::string header("FileNotFound:\r\n");
-                auto [ec, size] = co_await streamer.write(net::buffer(header));
+                auto [ec,
+                      size] = co_await sendHeader(streamer, "FileNotFound:");
                 co_return ec ? ec : boost::system::error_code{};
             }
             file.seekg(0, std::ios::end);
             auto fileSize = static_cast<std::size_t>(file.tellg());
             file.seekg(0, std::ios::beg);
-            std::string header = std::format("Content-Size:{}\r\n", fileSize);
-            auto [ec, size] = co_await streamer.write(net::buffer(header));
+
+            auto [ec, size] = co_await sendHeader(
+                streamer, std::format("Content-Size:{}", fileSize));
             if (ec)
             {
                 LOG_ERROR("Failed to write to stream: {}", ec.message());
@@ -90,11 +95,11 @@ struct FileSync
                 file.read(data.data(), data.size());
                 if (file.eof())
                 {
-                    co_await streamer.write(
-                        net::buffer(data.data(), file.gcount()));
+                    co_await sendData(streamer,
+                                      net::buffer(data, file.gcount()));
                     break;
                 }
-                co_await streamer.write(net::buffer(data));
+                co_await sendData(streamer, net::buffer(data));
             }
         }
         co_return boost::system::error_code{};
@@ -106,10 +111,9 @@ struct FileSync
         {
             std::string root = "/tmp";
             auto path = event.substr(event.find(':') + 1);
-            std::string header = std::format("Fetch:{}\r\n", path);
-            co_await streamer.write(net::buffer(header));
-            boost::system::error_code ec;
-            std::tie(ec, header) = co_await readHeader(streamer);
+            co_await sendHeader(streamer, std::format("Fetch:{}", path));
+
+            auto [ec, header] = co_await readHeader(streamer);
             if (header.find("FileNotFound") != std::string::npos)
             {
                 LOG_ERROR("File not found: {}", path);
@@ -118,17 +122,23 @@ struct FileSync
             if (header.find("Content-Size") != std::string::npos)
             {
                 auto size = std::stoul(header.substr(header.find(':') + 1));
-                std::ofstream file(root + path, std::ios::binary);
+                fs::path filePath = root + path;
+                if (!fs::exists(std::filesystem::path(filePath).parent_path()))
+                {
+                    fs::create_directories(
+                        std::filesystem::path(filePath).parent_path());
+                }
+                std::ofstream file(filePath, std::ios::binary);
                 if (!file.is_open())
                 {
-                    LOG_ERROR("File not found: {}", path);
+                    LOG_ERROR("File not found: {}", filePath.string());
                     co_return boost::system::error_code{};
                 }
                 std::array<char, 1024> data;
                 while (size > 0)
                 {
-                    auto [ec,
-                          bytes] = co_await streamer.read(net::buffer(data));
+                    auto [ec, bytes] =
+                        co_await readData(streamer, net::buffer(data));
                     if (ec)
                     {
                         LOG_ERROR("Failed to read from stream: {}",
@@ -140,6 +150,7 @@ struct FileSync
                 }
             }
         }
+        co_return boost::system::error_code{};
     }
 
     ~FileSync() {}
@@ -149,7 +160,7 @@ struct FileSync
 int main(int argc, const char* argv[])
 {
     auto [cert, path] =
-        getArgs(parseCommandline(argc, argv), "--cert,-c", "--path,-p");
+        getArgs(parseCommandline(argc, argv), "--cert,-c", "--dir,-d");
     net::io_context io_context;
     ssl::context ssl_server_context(ssl::context::sslv23_server);
 
