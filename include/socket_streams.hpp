@@ -13,9 +13,9 @@ struct TcpStreamType
 {
     using stream_type = boost::asio::ssl::stream<tcp::socket>;
     tcp::acceptor acceptor_;
-    boost::asio::io_context& context;
+    net::any_io_executor context;
     boost::asio::ssl::context& ssl_context_;
-    TcpStreamType(boost::asio::io_context& io_context, short port,
+    TcpStreamType(net::any_io_executor io_context, short port,
                   boost::asio::ssl::context& ssl_context) :
         acceptor_(io_context, tcp::endpoint(tcp::v4(), port)),
         context(io_context), ssl_context_(ssl_context)
@@ -46,9 +46,9 @@ struct UnixStreamType
         boost::asio::ssl::stream<boost::asio::local::stream_protocol::socket>;
     using unix_domain = boost::asio::local::stream_protocol;
     unix_domain::acceptor acceptor_;
-    boost::asio::io_context& context;
+    net::any_io_executor context;
     boost::asio::ssl::context& ssl_context_;
-    UnixStreamType(boost::asio::io_context& io_context, const std::string& path,
+    UnixStreamType(net::any_io_executor io_context, const std::string& path,
                    boost::asio::ssl::context& ssl_context) :
         acceptor_(io_context,
                   boost::asio::local::stream_protocol::endpoint(path)),
@@ -77,19 +77,26 @@ struct UnixStreamType
 template <typename StreamType>
 struct TimedStreamer
 {
-    TimedStreamer(StreamType& socket, net::steady_timer& timer) :
-        socket(socket), timer_(timer)
+    TimedStreamer(StreamType& socket,
+                  std::shared_ptr<net::steady_timer> timer) :
+        socket(socket), timer(timer)
     {}
-    AwaitableResult<std::size_t> read(net::mutable_buffer data)
+    AwaitableResult<std::size_t> read(net::mutable_buffer data,
+                                      bool timeout = true)
     {
-        setTimeout(30s);
+        if (timeout)
+        {
+            setTimeout(30s);
+        }
         boost::system::error_code ec;
         auto bytes = co_await socket.async_read_some(
             data, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        timer->cancel();
         co_return std::make_pair(ec, bytes);
     }
-    // AwaitableResult<std::size_t> readUntil(boost::beast::flat_buffer& buffer,
-    //                                        std::string_view delim)
+    // AwaitableResult<std::size_t> readUntil(boost::asio::streambuf streambuf&
+    // buffer,
+    //                                        const std::string& delim)
     // {
     //     setTimeout(30s);
     //     boost::system::error_code ec;
@@ -98,15 +105,20 @@ struct TimedStreamer
     //         boost::asio::redirect_error(net::use_awaitable, ec));
     //     co_return std::make_pair(ec, bytes);
     // }
-    AwaitableResult<std::string> readUntil(const std::string& delim,
-                                           size_t max_size = 1024)
+    AwaitableResult<std::string> readUntil(
+        const std::string& delim, size_t max_size = 1024, bool timeout = true)
     {
         std::string ret;
         ret.reserve(max_size);
         std::string data(1024, '\0');
         while (ret.length() <= max_size - delim.length())
         {
+            if (timeout)
+            {
+                setTimeout(30s);
+            }
             auto [ec, bytes] = co_await read(net::buffer(data));
+            timer->cancel();
             if (ec)
             {
                 if (ec != boost::asio::error::eof)
@@ -127,18 +139,23 @@ struct TimedStreamer
         co_return std::make_tuple(boost::system::error_code{}, std::move(ret));
     }
 
-    AwaitableResult<std::size_t> write(net::const_buffer data)
+    AwaitableResult<std::size_t> write(net::const_buffer data,
+                                       bool timeout = true)
     {
-        setTimeout(30s);
+        if (timeout)
+        {
+            setTimeout(30s);
+        }
         boost::system::error_code ec;
         auto bytes = co_await socket.async_write_some(
             data, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        timer->cancel();
         co_return std::make_pair(ec, bytes);
     }
     void setTimeout(std::chrono::seconds timeout)
     {
-        timer_.expires_after(timeout);
-        timer_.async_wait([this](const boost::system::error_code& ec) {
+        timer->expires_after(timeout);
+        timer->async_wait([this](const boost::system::error_code& ec) {
             if (!ec)
             {
                 socket.next_layer().cancel();
@@ -159,5 +176,5 @@ struct TimedStreamer
         return socket.next_layer().is_open();
     }
     StreamType& socket;
-    net::steady_timer& timer_;
+    std::shared_ptr<net::steady_timer> timer;
 };

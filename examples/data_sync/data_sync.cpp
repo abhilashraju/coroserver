@@ -87,16 +87,16 @@ int main(int argc, const char* argv[])
                                          boost::asio::ssl::context::pem);
         std::cerr << "Cert Loaded: \n";
 
-        FileWatcher watcher(io_context);
+        FileWatcher watcher(io_context.get_executor());
         watcher.addToWatchRecursive(path.value().data());
 
-        SyncHandler syncHandler(watcher);
+        SyncHandler syncHandler(watcher, "127.0.0.1", "8080");
         addHandler("FileModified", fileDownloadHandler);
         addHandler("Continue", fileContinueHandler);
 
-        TcpStreamType acceptor(io_context, std::atoi(port.value().data()),
-                               ssl_context);
-        TcpServer server(io_context, acceptor, syncHandler);
+        TcpStreamType acceptor(io_context.get_executor(),
+                               std::atoi(port.value().data()), ssl_context);
+        TcpServer server(io_context.get_executor(), acceptor, syncHandler);
 
         boost::asio::co_spawn(io_context,
                               watchFileChanges(watcher, syncHandler),

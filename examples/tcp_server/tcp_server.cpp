@@ -4,7 +4,7 @@
 
 #include "command_line_parser.hpp"
 #include "logger.hpp"
-
+using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 int main(int argc, const char* argv[])
 {
     auto [port, cert] =
@@ -31,8 +31,8 @@ int main(int argc, const char* argv[])
                                          boost::asio::ssl::context::pem);
     }
 
-    TcpStreamType acceptor(io_context, 8080, ssl_context);
-    auto router = [](auto streamer) -> net::awaitable<void> {
+    TcpStreamType acceptor(io_context.get_executor(), 8080, ssl_context);
+    auto router = [](Streamer streamer) -> net::awaitable<void> {
         while (true)
         {
             std::array<char, 1024> data;
@@ -60,6 +60,6 @@ int main(int argc, const char* argv[])
             }
         }
     };
-    TcpServer server(io_context, acceptor, router);
+    TcpServer server(io_context.get_executor(), acceptor, router);
     io_context.run();
 }

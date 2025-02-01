@@ -24,7 +24,7 @@ struct FileWatcher
     boost::asio::posix::stream_descriptor stream_;
     std::map<int, std::string> watch_fds;
 
-    FileWatcher(boost::asio::io_context& io_context) :
+    FileWatcher(boost::asio::any_io_executor io_context) :
         stream_(io_context, inotify_init1(IN_NONBLOCK))
     {
         if (stream_.native_handle() < 0)

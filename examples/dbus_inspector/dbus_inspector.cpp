@@ -27,7 +27,7 @@ int main()
         std::cerr << "Cert Loaded: \n";
         HttpRouter router;
         router.setIoContext(io_context);
-        TcpStreamType acceptor(io_context, 8080, ssl_context);
+        TcpStreamType acceptor(io_context.get_executor(), 8080, ssl_context);
         HttpServer server(io_context, acceptor, router);
         DbusHandlers dbusHandlers(*conn, router);
         io_context.run();

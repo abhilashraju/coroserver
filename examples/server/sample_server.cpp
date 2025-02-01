@@ -53,7 +53,8 @@ int main()
         HttpRouter router;
         router.setIoContext(io_context);
         // TcpStreamType acceptor(io_context, 8080, ssl_context);
-        UnixStreamType unixAcceptor(io_context, socket_path, ssl_context);
+        UnixStreamType unixAcceptor(io_context.get_executor(), socket_path,
+                                    ssl_context);
         HttpServer server(io_context, unixAcceptor, router);
         router.add_get_handler(
             "/mfaenabled",

@@ -1,5 +1,6 @@
 #pragma once
 #include "file_watcher.hpp"
+#include "taskqueue.hpp"
 #include "tcp_client.hpp"
 #include "tcp_server.hpp"
 #include "utilities.hpp"
@@ -84,30 +85,32 @@ inline net::awaitable<void> syncFile(
 
 struct SyncHandler
 {
-    SyncHandler(FileWatcher& watcher) : watcher_(watcher) {}
+    SyncHandler(FileWatcher& watcher, const std::string& ip,
+                const std::string& port) :
+        watcher_(watcher),
+        queue(watcher_.stream_.get_executor(), ssl_context, ip, port)
+    {}
     void operator()(const std::string& path, FileWatcher::FileStatus status)
     {
         net::co_spawn(
             watcher_.stream_.get_executor(),
             [this, path, status]() -> net::awaitable<void> {
-                ssl::context ssl_context(ssl::context::sslv23_client);
-                TcpClient client(watcher_.stream_.get_executor(), ssl_context);
-                auto ec = co_await client.connect("127.0.0.1", "8080");
-                if (ec)
-                {
-                    LOG_ERROR("Connect error: {}", ec.message());
-                    co_return;
-                }
-                co_await syncFile(path, status, client.streamer());
+                queue.addTask([path, status](Streamer streamer)
+                                  -> net::awaitable<boost::system::error_code> {
+                    co_await syncFile(path, status, streamer);
+                });
+                co_return;
             },
             net::detached);
     }
 
-    net::awaitable<void> operator()(auto streamer)
+    net::awaitable<void> operator()(Streamer streamer)
     {
         co_await next(streamer);
     }
 
   private:
     FileWatcher& watcher_;
+    ssl::context ssl_context{ssl::context::sslv23_client};
+    TaskQueue queue;
 };

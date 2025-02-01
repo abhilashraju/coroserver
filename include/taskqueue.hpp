@@ -3,9 +3,10 @@
 
 #include <deque>
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
-class MessageQueue
+class TaskQueue
 {
-    using Task = std::function<net::awaitable<void>(Streamer)>;
+    using Task =
+        std::function<net::awaitable<boost::system::error_code>(Streamer)>;
     struct Client
     {
         TcpClient client;
@@ -40,42 +41,42 @@ class MessageQueue
         std::string url;
         std::string port;
     };
-    struct Message
+    struct NetworkTask
     {
-        Task messageHandler;
+        Task task;
         std::reference_wrapper<Client> client;
         bool empty() const
         {
-            return !messageHandler;
+            return !task;
         }
     };
 
   public:
-    MessageQueue(net::any_io_executor ioContext, net::ssl::context& sslContext,
-                 const std::string& url, const std::string& port) :
+    TaskQueue(net::any_io_executor ioContext, net::ssl::context& sslContext,
+              const std::string& url, const std::string& port) :
         endPoint{url, port}, sslContext(sslContext), ioContext(ioContext)
     {}
-    void addMessage(Task messageHandler)
+    void addTask(Task messageHandler)
     {
-        bool empty = messagesHandlers.empty();
-        messagesHandlers.emplace_back(std::move(messageHandler));
+        bool empty = taskHandlers.empty();
+        taskHandlers.emplace_back(std::move(messageHandler));
         if (empty)
         {
             net::co_spawn(ioContext,
-                          std::bind_front(&MessageQueue::processMessages, this),
+                          std::bind_front(&TaskQueue::processTasks, this),
                           net::detached);
         }
     }
-    net::awaitable<void> handleMessage(Message message)
+    net::awaitable<void> handleTask(NetworkTask netTask)
     {
-        auto steamer = message.client.get().get().streamer();
-        co_await message.messageHandler(steamer);
-        if (steamer.isOpen())
+        auto steamer = netTask.client.get().get().streamer();
+        auto ec = co_await netTask.task(steamer);
+        if (!ec)
         {
-            message.client.get().release();
+            netTask.client.get().release();
             co_return;
         }
-        removeClient(message.client);
+        removeClient(netTask.client);
         // the connection is closed, we need to remove the client
     }
     void removeClient(std::reference_wrapper<Client> client)
@@ -86,41 +87,41 @@ class MessageQueue
                                      }),
                       clients.end());
     }
-    net::awaitable<void> processMessages()
+    net::awaitable<void> processTasks()
     {
         while (true)
         {
-            auto messageEntry = co_await getMessage();
-            if (messageEntry)
+            auto taskEntry = co_await getTask();
+            if (taskEntry)
             {
                 co_spawn(ioContext,
-                         std::bind_front(&MessageQueue::handleMessage, this,
-                                         std::move(*messageEntry)),
+                         std::bind_front(&TaskQueue::handleTask, this,
+                                         std::move(*taskEntry)),
                          net::detached);
             }
         }
 
         co_return;
     }
-    net::awaitable<void> waitForMessage()
+    net::awaitable<void> waitForTask()
     {
-        while (messagesHandlers.empty())
+        while (taskHandlers.empty())
         {
             co_await net::post(co_await net::this_coro::executor,
                                net::use_awaitable);
         }
         co_return;
     }
-    net::awaitable<std::optional<Message>> getMessage()
+    net::awaitable<std::optional<NetworkTask>> getTask()
     {
-        co_await waitForMessage();
+        co_await waitForTask();
 
         auto client = co_await getAvailableClient();
         if (client)
         {
-            auto message = std::move(messagesHandlers.front());
-            messagesHandlers.pop_front();
-            co_return Message{message, *client};
+            auto message = std::move(taskHandlers.front());
+            taskHandlers.pop_front();
+            co_return NetworkTask{message, *client};
         }
         co_return std::nullopt;
     }
@@ -183,7 +184,7 @@ class MessageQueue
             boost::system::errc::connection_refused);
     }
 
-    std::deque<Task> messagesHandlers;
+    std::deque<Task> taskHandlers;
     std::vector<std::unique_ptr<Client>> clients;
     EndPoint endPoint;
     net::ssl::context& sslContext;

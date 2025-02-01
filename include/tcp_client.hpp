@@ -39,7 +39,7 @@ class TcpClient
   public:
     TcpClient(net::any_io_executor io_context, ssl::context& ssl_context) :
         resolver_(io_context), stream_(io_context, ssl_context),
-        timer_(io_context)
+        timer_(std::make_shared<net::steady_timer>(io_context))
     {}
 
     net::awaitable<boost::system::error_code>
@@ -96,5 +96,5 @@ class TcpClient
   private:
     tcp::resolver resolver_;
     ssl::stream<tcp::socket> stream_;
-    net::steady_timer timer_;
+    std::shared_ptr<net::steady_timer> timer_;
 };

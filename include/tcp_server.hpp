@@ -11,10 +11,9 @@ class TcpServer
 {
   public:
     using Streamer = TimedStreamer<typename Accepter::stream_type>;
-    TcpServer(boost::asio::io_context& io_context, Accepter& accepter,
+    TcpServer(net::any_io_executor io_context, Accepter& accepter,
               Router& router) :
-        context(io_context), acceptor_(accepter), router_(router),
-        timer_(io_context)
+        context(io_context), acceptor(accepter), router(router)
     {
         start_accept();
     }
@@ -25,7 +24,7 @@ class TcpServer
         // auto socket =
         // std::make_shared<boost::asio::ssl::stream<tcp::socket>>(
         //     context, ssl_context_);
-        // acceptor_.async_accept(
+        // acceptor.async_accept(
         //     socket->lowest_layer(),
         //     [this, socket](boost::system::error_code ec) {
         //         if (!ec)
@@ -35,7 +34,7 @@ class TcpServer
         //         }
         //         start_accept();
         //     });
-        acceptor_.accept([this](auto&& socket) {
+        acceptor.accept([this](auto&& socket) {
             boost::asio::co_spawn(context, handle_client(socket),
                                   boost::asio::detached);
             start_accept();
@@ -48,12 +47,18 @@ class TcpServer
         // Perform SSL handshake
         co_await socket->async_handshake(boost::asio::ssl::stream_base::server,
                                          boost::asio::use_awaitable);
-
-        co_await router_(Streamer(*socket, timer_));
+        if constexpr (requires { router(socket); })
+        {
+            co_await router(socket);
+        }
+        else
+        {
+            co_await router(Streamer(
+                *socket, std::make_shared<net::steady_timer>(context)));
+        }
     }
 
-    boost::asio::io_context& context;
-    Accepter& acceptor_;
-    Router& router_;
-    net::steady_timer timer_;
+    net::any_io_executor context;
+    Accepter& acceptor;
+    Router& router;
 };
