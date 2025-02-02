@@ -5,9 +5,6 @@
 #include "file_watcher.hpp"
 #include "logger.hpp"
 
-#include <filesystem>
-#include <fstream>
-namespace fs = std::filesystem;
 net::awaitable<boost::system::error_code>
     helloProvider(Streamer streamer, const std::string& eventReplay)
 {
@@ -70,37 +67,7 @@ struct FileSync
         if (eventReplay.find("Fetch") != std::string::npos)
         {
             auto path = eventReplay.substr(eventReplay.find(':') + 1);
-            std::ifstream file(path, std::ios::binary);
-            if (!file.is_open())
-            {
-                LOG_ERROR("File not found: {}", path);
-                auto [ec,
-                      size] = co_await sendHeader(streamer, "FileNotFound:");
-                co_return ec ? ec : boost::system::error_code{};
-            }
-            file.seekg(0, std::ios::end);
-            auto fileSize = static_cast<std::size_t>(file.tellg());
-            file.seekg(0, std::ios::beg);
-
-            auto [ec, size] = co_await sendHeader(
-                streamer, std::format("Content-Size:{}", fileSize));
-            if (ec)
-            {
-                LOG_ERROR("Failed to write to stream: {}", ec.message());
-                co_return ec;
-            }
-            std::array<char, 1024> data;
-            while (true)
-            {
-                file.read(data.data(), data.size());
-                if (file.eof())
-                {
-                    co_await sendData(streamer,
-                                      net::buffer(data, file.gcount()));
-                    break;
-                }
-                co_await sendData(streamer, net::buffer(data));
-            }
+            co_return co_await sendFile(streamer, path);
         }
         co_return boost::system::error_code{};
     }
@@ -113,42 +80,7 @@ struct FileSync
             auto path = event.substr(event.find(':') + 1);
             co_await sendHeader(streamer, std::format("Fetch:{}", path));
 
-            auto [ec, header] = co_await readHeader(streamer);
-            if (header.find("FileNotFound") != std::string::npos)
-            {
-                LOG_ERROR("File not found: {}", path);
-                co_return boost::system::error_code{};
-            }
-            if (header.find("Content-Size") != std::string::npos)
-            {
-                auto size = std::stoul(header.substr(header.find(':') + 1));
-                fs::path filePath = root + path;
-                if (!fs::exists(std::filesystem::path(filePath).parent_path()))
-                {
-                    fs::create_directories(
-                        std::filesystem::path(filePath).parent_path());
-                }
-                std::ofstream file(filePath, std::ios::binary);
-                if (!file.is_open())
-                {
-                    LOG_ERROR("File not found: {}", filePath.string());
-                    co_return boost::system::error_code{};
-                }
-                std::array<char, 1024> data;
-                while (size > 0)
-                {
-                    auto [ec, bytes] =
-                        co_await readData(streamer, net::buffer(data));
-                    if (ec)
-                    {
-                        LOG_ERROR("Failed to read from stream: {}",
-                                  ec.message());
-                        co_return ec;
-                    }
-                    file.write(data.data(), bytes);
-                    size -= bytes;
-                }
-            }
+            co_return co_await recieveFile(streamer, root + path);
         }
         co_return boost::system::error_code{};
     }
@@ -161,6 +93,8 @@ int main(int argc, const char* argv[])
 {
     auto [cert, path] =
         getArgs(parseCommandline(argc, argv), "--cert,-c", "--dir,-d");
+    reactor::Logger<std::ostream>& logger = reactor::getLogger();
+    logger.setLogLevel(reactor::LogLevel::INFO);
     net::io_context io_context;
     ssl::context ssl_server_context(ssl::context::sslv23_server);
 

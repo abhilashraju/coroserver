@@ -123,7 +123,7 @@ struct TimedStreamer
             {
                 if (ec != boost::asio::error::eof)
                 {
-                    LOG_INFO("Error reading: {}", ec.message());
+                    LOG_DEBUG("Error reading: {}", ec.message());
                 }
                 co_return std::make_tuple(ec, std::move(ret));
             }

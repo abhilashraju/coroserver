@@ -22,7 +22,7 @@ struct FileWatcher
         erased
     };
     using EventMap = std::map<std::string, inotify_event>;
-    boost::asio::posix::stream_descriptor stream_;
+    mutable boost::asio::posix::stream_descriptor stream_;
     std::map<int, std::string> watch_fds;
 
     FileWatcher(boost::asio::any_io_executor io_context) :
@@ -78,7 +78,7 @@ struct FileWatcher
         }
     }
 
-    boost::asio::awaitable<EventMap> watch()
+    boost::asio::awaitable<EventMap> watch() const
     {
         std::vector<unsigned char> buffer(1024);
         std::size_t length = co_await stream_.async_read_some(
@@ -90,7 +90,7 @@ struct FileWatcher
             inotify_event* event = reinterpret_cast<inotify_event*>(&buffer[i]);
             if (event->len > 0)
             {
-                auto path = watch_fds[event->wd] + "/" + event->name;
+                auto path = watch_fds.at(event->wd) + "/" + event->name;
                 events[path] = *event;
             }
 
@@ -99,28 +99,32 @@ struct FileWatcher
 
         co_return events;
     }
-    boost::asio::awaitable<void> watchForChanges(auto& handler)
+    boost::asio::awaitable<void> watchForChanges(auto& handler) const
     {
-        while (true)
+        auto events = co_await watch();
+        for (auto& [name, event] : events)
         {
-            auto events = co_await watch();
-            for (auto& [name, event] : events)
+            LOG_INFO("File: {} Status: {}", name, event.mask);
+            if (event.mask & IN_CREATE)
             {
-                LOG_INFO("File: {} Status: {}", name, event.mask);
-                if (event.mask & IN_CREATE)
-                {
-                    handler(name, FileStatus::created);
-                }
-                else if (event.mask & IN_DELETE)
-                {
-                    handler(name, FileStatus::erased);
-                }
-                else if (event.mask & IN_MODIFY)
-                {
-                    handler(name, FileStatus::modified);
-                }
+                handler(name, FileStatus::created);
+            }
+            else if (event.mask & IN_DELETE)
+            {
+                handler(name, FileStatus::erased);
+            }
+            else if (event.mask & IN_MODIFY)
+            {
+                handler(name, FileStatus::modified);
             }
         }
+        boost::asio::co_spawn(
+            stream_.get_executor(),
+            [this, &handler]() -> boost::asio::awaitable<void> {
+                co_await watchForChanges(handler);
+            },
+            boost::asio::detached);
+        co_return;
     }
 };
 template <typename Handler>
