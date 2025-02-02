@@ -46,7 +46,7 @@ class Logger
 
 inline Logger<std::ostream>& getLogger()
 {
-    static Logger<std::ostream> logger(LogLevel::DEBUG, std::cout);
+    static Logger<std::ostream> logger(LogLevel::ERROR, std::cout);
     return logger;
 }
 } // namespace reactor

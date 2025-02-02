@@ -33,7 +33,7 @@ inline AwaitableResult<std::string> readHeader(Streamer streamer)
     auto [ec, data] = co_await streamer.readUntil("\r\n", 1024, false);
     if (ec)
     {
-        LOG_ERROR("Error reading: {}", ec.message());
+        LOG_INFO("Error reading: {}", ec.message());
         co_return std::make_pair(ec, data);
     }
     data.erase(data.length() - 2, 2);
@@ -120,8 +120,9 @@ struct EventQueue
             co_return ec;
         }
         std::string done;
-        std::tie(ec, done) = co_await readHeader(streamer);
-        co_return ec;
+        co_await readHeader(streamer);
+        co_return boost::asio::error::connection_reset;
+        // co_return ec;
     }
     void resendEvent(uint64_t id,
                      std::reference_wrapper<EventProvider> provider)
@@ -194,7 +195,7 @@ struct EventQueue
             }
             else if (ec)
             {
-                LOG_ERROR("Failed to handle client: {}", ec.message());
+                LOG_INFO("Failed to handle client: {}", ec.message());
                 co_return;
             }
         }

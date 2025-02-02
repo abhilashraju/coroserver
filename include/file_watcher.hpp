@@ -1,4 +1,6 @@
 #pragma once
+#include "logger.hpp"
+
 #include <sys/inotify.h>
 #include <unistd.h>
 
@@ -11,7 +13,6 @@
 #include <iostream>
 #include <map>
 #include <stdexcept>
-
 struct FileWatcher
 {
     enum class FileStatus
@@ -105,6 +106,7 @@ struct FileWatcher
             auto events = co_await watch();
             for (auto& [name, event] : events)
             {
+                LOG_INFO("File: {} Status: {}", name, event.mask);
                 if (event.mask & IN_CREATE)
                 {
                     handler(name, FileStatus::created);
