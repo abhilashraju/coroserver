@@ -1,10 +1,12 @@
 
 
 #include "command_line_parser.hpp"
+#include "eventmethods.hpp"
 #include "eventqueue.hpp"
 #include "file_watcher.hpp"
 #include "logger.hpp"
 
+#include <nlohmann/json.hpp>
 net::awaitable<boost::system::error_code>
     helloProvider(Streamer streamer, const std::string& eventReplay)
 {
@@ -51,6 +53,9 @@ struct FileSync
         switch (status)
         {
             case FileWatcher::FileStatus::created:
+                // eventQueue.addEvent(std::format("FileModified:{}\r\n",
+                // path));
+                break;
             case FileWatcher::FileStatus::modified:
                 eventQueue.addEvent(std::format("FileModified:{}\r\n", path));
                 break;
@@ -91,9 +96,20 @@ struct FileSync
 };
 int main(int argc, const char* argv[])
 {
-    auto [cert, path, dest, rp] =
-        getArgs(parseCommandline(argc, argv), "--cert,-c", "--dir,-d",
-                "--remote,-r", "--remote-port,-rp");
+    auto [conf] = getArgs(parseCommandline(argc, argv), "--conf,-c");
+    if (!conf)
+    {
+        LOG_ERROR(
+            "No config file provided :eg event_broker --conf /path/to/conf");
+
+        return 1;
+    }
+    auto json = nlohmann::json::parse(std::ifstream(conf.value().data()));
+    auto path = json.value("path", std::string{});
+    auto dest = json.value("remote", std::string{});
+    auto cert = json.value("cert", std::string{});
+    auto rp = json.value("remote-port", std::string{});
+    auto port = json.value("port", std::string{});
     reactor::Logger<std::ostream>& logger = reactor::getLogger();
     logger.setLogLevel(reactor::LogLevel::INFO);
     net::io_context io_context;
@@ -104,27 +120,27 @@ int main(int argc, const char* argv[])
         boost::asio::ssl::context::default_workarounds |
         boost::asio::ssl::context::no_sslv2 |
         boost::asio::ssl::context::single_dh_use);
-    if (cert)
+    if (!cert.empty())
     {
         ssl_server_context.use_certificate_chain_file(
-            cert.value().data() + std::string("/server-cert.pem"));
+            cert + std::string("/server-cert.pem"));
         ssl_server_context.use_private_key_file(
-            cert.value().data() + std::string("/server-key.pem"),
+            cert + std::string("/server-key.pem"),
             boost::asio::ssl::context::pem);
     }
     else
     {
-        ssl_server_context.use_certificate_chain_file("/tmp/server-cert.pem");
-        ssl_server_context.use_private_key_file("/tmp/server-key.pem",
-                                                boost::asio::ssl::context::pem);
+        ssl_server_context.use_certificate_chain_file(
+            "/etc/ssl/private/server-cert.pem");
+        ssl_server_context.use_private_key_file(
+            "/etc/ssl/private/server-key.pem", boost::asio::ssl::context::pem);
     }
     ssl::context ssl_client_context(ssl::context::sslv23_client);
-    TcpStreamType acceptor(io_context.get_executor(), 8080, ssl_server_context);
+    TcpStreamType acceptor(io_context.get_executor(), std::atoi(port.data()),
+                           ssl_server_context);
     EventQueue eventQueue(io_context.get_executor(), acceptor,
-                          ssl_client_context, dest.value().data(),
-                          rp.value().data());
-    FileSync fileSync(io_context.get_executor(), path.value().data(),
-                      eventQueue);
+                          ssl_client_context, dest, rp);
+    FileSync fileSync(io_context.get_executor(), path, eventQueue);
     eventQueue.addEventProvider("Hello", helloProvider);
 
     std::vector<std::string> events{"Hello: World\r\n"};
