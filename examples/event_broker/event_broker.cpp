@@ -91,8 +91,9 @@ struct FileSync
 };
 int main(int argc, const char* argv[])
 {
-    auto [cert, path] =
-        getArgs(parseCommandline(argc, argv), "--cert,-c", "--dir,-d");
+    auto [cert, path, dest, rp] =
+        getArgs(parseCommandline(argc, argv), "--cert,-c", "--dir,-d",
+                "--remote,-r", "--remote-port,-rp");
     reactor::Logger<std::ostream>& logger = reactor::getLogger();
     logger.setLogLevel(reactor::LogLevel::INFO);
     net::io_context io_context;
@@ -120,7 +121,8 @@ int main(int argc, const char* argv[])
     ssl::context ssl_client_context(ssl::context::sslv23_client);
     TcpStreamType acceptor(io_context.get_executor(), 8080, ssl_server_context);
     EventQueue eventQueue(io_context.get_executor(), acceptor,
-                          ssl_client_context, "127.0.0.1", "8080");
+                          ssl_client_context, dest.value().data(),
+                          rp.value().data());
     FileSync fileSync(io_context.get_executor(), path.value().data(),
                       eventQueue);
     eventQueue.addEventProvider("Hello", helloProvider);
