@@ -13,12 +13,23 @@ struct EventQueue
     using EventConsumer =
         std::function<net::awaitable<boost::system::error_code>(
             Streamer streamer, const std::string&)>;
+    struct DefaultEventProvider
+    {
+        net::awaitable<boost::system::error_code>
+            operator()(Streamer streamer, const std::string& event)
+        {
+            LOG_WARNING("Received event in defualt provider: {}", event);
+            co_return boost::system::error_code{};
+        }
+    };
     EventQueue(net::any_io_executor ioContext, TcpStreamType& acceptor,
                net::ssl::context& sslClientContext, const std::string& url,
                const std::string& port) :
         taskQueue(ioContext, sslClientContext, url, port),
         tcpServer(ioContext, acceptor, *this)
-    {}
+    {
+        addEventProvider("default", defaultProvider);
+    }
     void addEventProvider(const std::string& eventId,
                           EventProvider eventProvider)
     {
@@ -28,6 +39,7 @@ struct EventQueue
     {
         eventConsumers[eventId] = std::move(consumer);
     }
+
     u_int64_t epocNow()
     {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -88,13 +100,13 @@ struct EventQueue
         events[uniqueEventId] = event;
         auto eventId = getEventId(event);
         auto it = eventProviders.find(eventId);
-        if (it != eventProviders.end())
+        if (it == eventProviders.end())
         {
-            std::reference_wrapper<EventProvider> provider(it->second);
-            taskQueue.addTask(
-                std::bind_front(&EventQueue::sendEventHandler, this,
-                                uniqueEventId, provider, event));
+            it = eventProviders.find("default");
         }
+        std::reference_wrapper<EventProvider> provider(it->second);
+        taskQueue.addTask(std::bind_front(&EventQueue::sendEventHandler, this,
+                                          uniqueEventId, provider, event));
     }
     bool eventExists(const std::string& event)
     {
@@ -168,4 +180,6 @@ struct EventQueue
     std::map<uint64_t, std::string> events;
     TaskQueue taskQueue;
     TcpServer<TcpStreamType, EventQueue> tcpServer;
+    DefaultEventProvider defaultProvider;
+    DefaultEventProvider defaultConsumer;
 };

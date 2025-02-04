@@ -7,18 +7,12 @@
 #include "logger.hpp"
 
 #include <nlohmann/json.hpp>
-net::awaitable<boost::system::error_code>
-    helloProvider(Streamer streamer, const std::string& eventReplay)
-{
-    LOG_DEBUG("Received event: {}", eventReplay);
 
-    co_return boost::system::error_code{};
-}
 net::awaitable<boost::system::error_code>
     hiProvider(Streamer streamer, const std::string& eventReplay)
 {
     LOG_DEBUG("Received event: {}", eventReplay);
-
+    co_await sendHeader(streamer, "I am good");
     co_return boost::system::error_code{};
 }
 net::awaitable<boost::system::error_code>
@@ -26,6 +20,8 @@ net::awaitable<boost::system::error_code>
 {
     LOG_DEBUG("Received event: {}", eventReplay);
     co_await sendHeader(streamer, "How are you?");
+    auto [ec, message] = co_await readHeader(streamer);
+    LOG_DEBUG("Received event: {}", message);
     co_return boost::system::error_code{};
 }
 struct FileSync
@@ -162,7 +158,7 @@ int main(int argc, const char* argv[])
     EventQueue eventQueue(io_context.get_executor(), acceptor,
                           ssl_client_context, dest, rp);
     FileSync fileSync(io_context.get_executor(), path, eventQueue);
-    eventQueue.addEventProvider("Hello", helloProvider);
+
     eventQueue.addEventProvider("Hi", hiProvider);
     eventQueue.addEventConsumer("Hi", hiConsumer);
 
