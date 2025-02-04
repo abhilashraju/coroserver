@@ -96,6 +96,17 @@ struct EventQueue
                                 uniqueEventId, provider, event));
         }
     }
+    bool eventExists(const std::string& event)
+    {
+        for (auto& [id, e] : events)
+        {
+            if (e == event)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     inline net::awaitable<boost::system::error_code>
         parseAndHandle(std::string_view header, Streamer streamer)

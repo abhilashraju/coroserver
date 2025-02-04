@@ -14,6 +14,20 @@ net::awaitable<boost::system::error_code>
 
     co_return boost::system::error_code{};
 }
+net::awaitable<boost::system::error_code>
+    hiProvider(Streamer streamer, const std::string& eventReplay)
+{
+    LOG_DEBUG("Received event: {}", eventReplay);
+
+    co_return boost::system::error_code{};
+}
+net::awaitable<boost::system::error_code>
+    hiConsumer(Streamer streamer, const std::string& eventReplay)
+{
+    LOG_DEBUG("Received event: {}", eventReplay);
+    co_await sendHeader(streamer, "How are you?");
+    co_return boost::system::error_code{};
+}
 struct FileSync
 {
     FileSync(net::any_io_executor io_context, const std::string& path,
@@ -57,11 +71,18 @@ struct FileSync
                 // path));
                 break;
             case FileWatcher::FileStatus::modified:
-                eventQueue.addEvent(std::format("FileModified:{}\r\n", path));
-                break;
+            {
+                auto event = makeEvent("FileModified", path);
+                if (!eventQueue.eventExists(event))
+                {
+                    eventQueue.addEvent(event);
+                }
+            }
+
+            break;
             case FileWatcher::FileStatus::erased:
             {
-                eventQueue.addEvent(std::format("FileDeleted:{}\r\n", path));
+                eventQueue.addEvent(makeEvent("FileDeleted", path));
             }
             break;
         }
@@ -142,8 +163,11 @@ int main(int argc, const char* argv[])
                           ssl_client_context, dest, rp);
     FileSync fileSync(io_context.get_executor(), path, eventQueue);
     eventQueue.addEventProvider("Hello", helloProvider);
+    eventQueue.addEventProvider("Hi", hiProvider);
+    eventQueue.addEventConsumer("Hi", hiConsumer);
 
-    std::vector<std::string> events{"Hello: World\r\n"};
+    std::vector<std::string> events{makeEvent("Hello", "World"),
+                                    makeEvent("Hi", "World")};
     for (auto& event : events)
     {
         eventQueue.addEvent(event);

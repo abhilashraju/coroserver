@@ -5,6 +5,10 @@
 #include <fstream>
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 namespace fs = std::filesystem;
+inline std::string makeEvent(const std::string& id, const std::string& data)
+{
+    return std::format("{}:{}\r\n", id, data);
+}
 inline AwaitableResult<size_t> readData(Streamer streamer,
                                         net::mutable_buffer buffer)
 {
