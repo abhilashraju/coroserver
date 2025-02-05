@@ -19,6 +19,20 @@ struct EventQueue
             operator()(Streamer streamer, const std::string& event)
         {
             LOG_WARNING("Received event in defualt provider: {}", event);
+            if (event == DONE)
+            {
+                co_return boost::asio::error::connection_reset;
+            }
+            co_return boost::system::error_code{};
+        }
+    };
+    struct DefaultEventConsumer
+    {
+        net::awaitable<boost::system::error_code>
+            operator()(Streamer streamer, const std::string& event)
+        {
+            LOG_WARNING("Received event in defualt Consumer: {}", event);
+            // co_await sendHeader(streamer, "ConsumerNotFound");
             co_return boost::system::error_code{};
         }
     };
@@ -29,6 +43,7 @@ struct EventQueue
         tcpServer(ioContext, acceptor, *this)
     {
         addEventProvider("default", defaultProvider);
+        addEventConsumer("default", defaultConsumer);
     }
     void addEventProvider(const std::string& eventId,
                           EventProvider eventProvider)
@@ -82,8 +97,8 @@ struct EventQueue
             LOG_ERROR("Failed to handle event ret:{} {}", header, ec.message());
             co_return ec;
         }
-        std::string done;
-        co_await readHeader(streamer);
+
+        auto [ec1, done] = co_await readHeader(streamer);
         co_return boost::asio::error::connection_reset;
         // co_return ec;
     }
@@ -125,22 +140,14 @@ struct EventQueue
     {
         auto consumerId = getEventId(header);
         auto handler_it = eventConsumers.find(consumerId);
-        if (handler_it != eventConsumers.end())
+        if (handler_it == eventConsumers.end())
         {
-            auto ec = co_await handler_it->second(streamer, header.data());
-            if (ec)
-            {
-                LOG_ERROR("Failed to handle event: {}", ec.message());
-                co_return ec;
-            }
-
-            auto [ec1, size] = co_await sendHeader(streamer, "Done");
-            co_return ec1;
+            handler_it = eventConsumers.find("default");
         }
-        auto [ec, size] = co_await sendHeader(streamer, "ConsumerNotFound");
+        auto ec = co_await handler_it->second(streamer, header.data());
         if (ec)
         {
-            LOG_ERROR("Failed to write to stream: {}", ec.message());
+            LOG_ERROR("Failed to handle event: {}", ec.message());
             co_return ec;
         }
         co_return co_await sendDone(streamer);
@@ -181,5 +188,5 @@ struct EventQueue
     TaskQueue taskQueue;
     TcpServer<TcpStreamType, EventQueue> tcpServer;
     DefaultEventProvider defaultProvider;
-    DefaultEventProvider defaultConsumer;
+    DefaultEventConsumer defaultConsumer;
 };

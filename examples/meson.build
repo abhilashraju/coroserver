@@ -8,11 +8,12 @@ subdir('gerrit_scripts')
 subdir('tcp_client')
 subdir('tcp_server')
 subdir('messageque')
-subdir('event_broker')
+
 sdbusplus_dep = dependency('sdbusplus', required: false, include_type: 'system')
 systemd = dependency('systemd',required: false)
 if sdbusplus_dep.found() and systemd.found()
     subdir('server')
     subdir('dbus_inspector')
     subdir('data_sync')
+    subdir('event_broker')
 endif

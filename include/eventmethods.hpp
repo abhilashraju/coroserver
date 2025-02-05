@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <fstream>
+static constexpr auto DONE = "Done";
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 namespace fs = std::filesystem;
 inline std::string makeEvent(const std::string& id, const std::string& data)
@@ -36,23 +37,28 @@ inline AwaitableResult<std::string> readHeader(Streamer streamer)
     auto [ec, data] = co_await streamer.readUntil("\r\n", 1024, false);
     if (ec)
     {
-        LOG_DEBUG("Error reading: {}", ec.message());
+        LOG_ERROR("Error reading: {}", ec.message());
         co_return std::make_pair(ec, data);
     }
     data.erase(data.length() - 2, 2);
-    LOG_INFO("Header: {}", data);
+    LOG_INFO("Recieved Header: {}", data);
     co_return std::make_pair(ec, data);
 }
 inline AwaitableResult<size_t> sendHeader(Streamer streamer,
                                           const std::string& data)
 {
-    co_await sendData(streamer, net::buffer(""));
     std::string header = std::format("{}\r\n", data);
-    co_return co_await streamer.write(net::buffer(header), false);
+    LOG_INFO("Sending Header: {}", header);
+    auto [ec, size] = co_await streamer.write(net::buffer(header), false);
+    if (ec)
+    {
+        LOG_ERROR("Failed to write to stream: {}", ec.message());
+    }
+    co_return std::make_pair(ec, size);
 }
 net::awaitable<boost::system::error_code> sendDone(Streamer streamer)
 {
-    auto [ec, size] = co_await sendHeader(streamer, "Done");
+    auto [ec, size] = co_await sendHeader(streamer, DONE);
     co_return ec;
 }
 net::awaitable<boost::system::error_code>
