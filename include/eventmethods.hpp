@@ -16,7 +16,7 @@ inline AwaitableResult<size_t> readData(Streamer streamer,
     auto [ec, size] = co_await streamer.read(buffer, false);
     if (ec)
     {
-        LOG_ERROR("Error reading: {}", ec.message());
+        LOG_DEBUG("Error reading: {}", ec.message());
         co_return std::make_pair(ec, size);
     }
     co_return std::make_pair(ec, size);
@@ -37,7 +37,7 @@ inline AwaitableResult<std::string> readHeader(Streamer streamer)
     auto [ec, data] = co_await streamer.readUntil("\r\n", 1024, false);
     if (ec)
     {
-        LOG_ERROR("Error reading: {}", ec.message());
+        LOG_DEBUG("Error reading: {}", ec.message());
         co_return std::make_pair(ec, data);
     }
     data.erase(data.length() - 2, 2);
@@ -83,7 +83,7 @@ net::awaitable<boost::system::error_code>
         co_return ec;
     }
     std::array<char, 1024> data;
-    while (true)
+    while (fileSize > 0)
     {
         file.read(data.data(), data.size());
         if (file.eof())
@@ -92,6 +92,7 @@ net::awaitable<boost::system::error_code>
             break;
         }
         co_await sendData(streamer, net::buffer(data));
+        fileSize -= data.size();
     }
     co_return boost::system::error_code{};
 }

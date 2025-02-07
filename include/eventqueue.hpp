@@ -38,8 +38,8 @@ struct EventQueue
     };
     EventQueue(net::any_io_executor ioContext, TcpStreamType& acceptor,
                net::ssl::context& sslClientContext, const std::string& url,
-               const std::string& port) :
-        taskQueue(ioContext, sslClientContext, url, port),
+               const std::string& port, int maxConnections = 1) :
+        taskQueue(ioContext, sslClientContext, url, port, maxConnections),
         tcpServer(ioContext, acceptor, *this)
     {
         addEventProvider("default", defaultProvider);

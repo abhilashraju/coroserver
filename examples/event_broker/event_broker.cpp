@@ -38,11 +38,13 @@ int main(int argc, const char* argv[])
         return 1;
     }
     auto json = nlohmann::json::parse(std::ifstream(conf.value().data()));
-    auto path = json.value("path", std::string{});
+
     auto dest = json.value("remote", std::string{});
     auto cert = json.value("cert", std::string{});
     auto rp = json.value("remote-port", std::string{});
     auto port = json.value("port", std::string{});
+    auto maxConnections = json.value("max-connections", 1);
+
     reactor::Logger<std::ostream>& logger = reactor::getLogger();
     logger.setLogLevel(reactor::LogLevel::INFO);
     net::io_context io_context;
@@ -66,12 +68,26 @@ int main(int argc, const char* argv[])
     TcpStreamType acceptor(io_context.get_executor(), std::atoi(port.data()),
                            ssl_server_context);
     EventQueue eventQueue(io_context.get_executor(), acceptor,
-                          ssl_client_context, dest, rp);
-    FileSync fileSync(io_context.get_executor(), path, eventQueue);
+                          ssl_client_context, dest, rp, maxConnections);
+    FileSync fileSync(io_context.get_executor(), eventQueue);
+    for (std::string path : json["paths"])
+    {
+        fileSync.addPath(path);
+    }
     DbusSync dbusSync(*conn, eventQueue);
-    dbusSync.addToSync(
-        "xyz.openbmc_project.User.Manager", "/xyz/openbmc_project/user",
-        "xyz.openbmc_project.User.MultiFactorAuthConfiguration", "Enabled");
+    if (json.contains("dbus-sync") && json["dbus-sync"].is_array())
+    {
+        for (const auto& item : json["dbus-sync"])
+        {
+            auto service = item.value("service", std::string{});
+            auto path = item.value("path", std::string{});
+            auto interface = item.value("interface", std::string{});
+            auto property = item.value("property", std::string{});
+
+            dbusSync.addToSync(service, path, interface, property);
+        }
+    }
+
     eventQueue.addEventProvider("Hi", hiProvider);
     eventQueue.addEventConsumer("Hi", hiConsumer);
 

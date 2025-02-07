@@ -5,11 +5,9 @@
 #include "logger.hpp"
 struct FileSync
 {
-    FileSync(net::any_io_executor io_context, const std::string& path,
-             EventQueue& eventQueue) :
+    FileSync(net::any_io_executor io_context, EventQueue& eventQueue) :
         watcher(io_context), eventQueue(eventQueue)
     {
-        watcher.addToWatchRecursive(path);
         eventQueue.addEventProvider(
             "FileModified",
             [this](Streamer streamer, const std::string& eventReplay)
@@ -36,6 +34,10 @@ struct FileSync
             });
         boost::asio::co_spawn(io_context, watchFileChanges(watcher, *this),
                               boost::asio::detached);
+    }
+    void addPath(const std::string& path)
+    {
+        watcher.addToWatchRecursive(path);
     }
     void operator()(const std::string& path, FileWatcher::FileStatus status)
     {

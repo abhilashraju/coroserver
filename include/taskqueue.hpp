@@ -53,8 +53,10 @@ class TaskQueue
 
   public:
     TaskQueue(net::any_io_executor ioContext, net::ssl::context& sslContext,
-              const std::string& url, const std::string& port) :
-        endPoint{url, port}, sslContext(sslContext), ioContext(ioContext)
+              const std::string& url, const std::string& port,
+              int maxConnections = 1) :
+        endPoint{url, port}, sslContext(sslContext), ioContext(ioContext),
+        maxClients(maxConnections)
     {}
     void addTask(Task messageHandler)
     {
