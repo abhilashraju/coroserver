@@ -117,6 +117,21 @@ struct EventQueue
         events.erase(id);
         store();
     }
+    net::awaitable<boost::system::error_code>
+        executeProvider(std::reference_wrapper<EventProvider> provider,
+                        Streamer streamer, const std::string& event)
+    {
+        try
+        {
+            co_return co_await provider(streamer, event);
+        }
+        catch (const std::exception& e)
+        {
+            LOG_ERROR("Failed to handle event: {}", e.what());
+            co_return boost::asio::error::connection_reset;
+        }
+    }
+
     net::awaitable<boost::system::error_code> sendEventHandler(
         uint64_t id, std::reference_wrapper<EventProvider> provider,
         const std::string& event, Streamer streamer)
@@ -137,11 +152,10 @@ struct EventQueue
             co_return ec;
         }
         removeEvent(id);
-        ec = co_await provider.get()(streamer, header);
+        ec = co_await executeProvider(provider, streamer, header);
 
         if (ec)
         {
-            LOG_INFO("Failed to handle event ret:{} {}", header, ec.message());
             co_return ec;
         }
 
@@ -186,6 +200,20 @@ struct EventQueue
         }
         return false;
     }
+    net::awaitable<boost::system::error_code>
+        executeConsumer(std::reference_wrapper<EventConsumer> consumer,
+                        Streamer streamer, const std::string& event)
+    {
+        try
+        {
+            co_return co_await consumer(streamer, event);
+        }
+        catch (const std::exception& e)
+        {
+            LOG_ERROR("Failed to handle event: {}", e.what());
+            co_return boost::asio::error::connection_reset;
+        }
+    }
 
     inline net::awaitable<boost::system::error_code>
         parseAndHandle(std::string_view header, Streamer streamer)
@@ -196,7 +224,8 @@ struct EventQueue
         {
             handler_it = eventConsumers.find("default");
         }
-        auto ec = co_await handler_it->second(streamer, header.data());
+        auto ec = co_await executeConsumer(handler_it->second, streamer,
+                                           header.data());
         if (ec)
         {
             LOG_ERROR("Failed to handle event: {}", ec.message());
