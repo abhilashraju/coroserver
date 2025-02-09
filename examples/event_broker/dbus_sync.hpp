@@ -8,11 +8,25 @@
 #include <ranges>
 struct DbusSync
 {
-    DbusSync(sdbusplus::asio::connection& conn, EventQueue& eventQueue) :
-        conn(conn), eventQueue(eventQueue)
+    DbusSync(sdbusplus::asio::connection& conn, EventQueue& eventQueue,
+             const nlohmann::json& json) : conn(conn), eventQueue(eventQueue)
     {
         eventQueue.addEventConsumer(
             "PropertyChanged", std::bind_front(&DbusSync::dbusConsumer, this));
+        if (!json.is_array())
+        {
+            LOG_ERROR("Invalid configuration for dbus-sync, expected an array");
+            return;
+        }
+        for (const auto& item : json)
+        {
+            auto service = item.value("service", std::string{});
+            auto path = item.value("path", std::string{});
+            auto interface = item.value("interface", std::string{});
+            auto property = item.value("property", std::string{});
+
+            addToSync(service, path, interface, property);
+        }
     }
     void addToSync(const std::string& service, const std::string& path,
                    const std::string& interface, const std::string& property)

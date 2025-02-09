@@ -69,24 +69,12 @@ int main(int argc, const char* argv[])
                            ssl_server_context);
     EventQueue eventQueue(io_context.get_executor(), acceptor,
                           ssl_client_context, dest, rp, maxConnections);
-    FileSync fileSync(io_context.get_executor(), eventQueue);
-    for (std::string path : json["paths"])
-    {
-        fileSync.addPath(path);
-    }
-    DbusSync dbusSync(*conn, eventQueue);
-    if (json.contains("dbus-sync") && json["dbus-sync"].is_array())
-    {
-        for (const auto& item : json["dbus-sync"])
-        {
-            auto service = item.value("service", std::string{});
-            auto path = item.value("path", std::string{});
-            auto interface = item.value("interface", std::string{});
-            auto property = item.value("property", std::string{});
 
-            dbusSync.addToSync(service, path, interface, property);
-        }
-    }
+    FileSync fileSync(io_context.get_executor(), eventQueue,
+                      json.value("file-sync", nlohmann::json{}));
+
+    DbusSync dbusSync(*conn, eventQueue,
+                      json.value("dbus-sync", nlohmann::json{}));
 
     eventQueue.addEventProvider("Hi", hiProvider);
     eventQueue.addEventConsumer("Hi", hiConsumer);
@@ -97,6 +85,7 @@ int main(int argc, const char* argv[])
     {
         eventQueue.addEvent(event);
     }
+    eventQueue.load();
     io_context.run();
     return 0;
 }

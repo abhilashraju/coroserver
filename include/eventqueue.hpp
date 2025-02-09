@@ -1,10 +1,12 @@
 #pragma once
+#include "serializer.hpp"
 #include "taskqueue.hpp"
 #include "tcp_server.hpp"
 #include "utilities.hpp"
 
 #include <map>
-
+static constexpr auto EVENTQUEFILE = "/var/lib/coroserver/eventqueue.dat";
+namespace fs = std::filesystem;
 struct EventQueue
 {
     using EventProvider =
@@ -40,7 +42,7 @@ struct EventQueue
                net::ssl::context& sslClientContext, const std::string& url,
                const std::string& port, int maxConnections = 1) :
         taskQueue(ioContext, sslClientContext, url, port, maxConnections),
-        tcpServer(ioContext, acceptor, *this)
+        tcpServer(ioContext, acceptor, *this), serializer(EVENTQUEFILE)
     {
         addEventProvider("default", defaultProvider);
         addEventConsumer("default", defaultConsumer);
@@ -53,6 +55,46 @@ struct EventQueue
     void addEventConsumer(const std::string& eventId, EventConsumer consumer)
     {
         eventConsumers[eventId] = std::move(consumer);
+    }
+    std::optional<std::string> readFile(const std::string& filePath)
+    {
+        std::ifstream file(filePath);
+        if (!file.is_open())
+        {
+            LOG_ERROR("Failed to open file: {}", filePath);
+            return std::nullopt;
+        }
+
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        return buffer.str();
+    }
+    void load()
+    {
+        if (!fs::exists(EVENTQUEFILE))
+        {
+            LOG_INFO("No event queue file found");
+            return;
+        }
+        serializer.load();
+        std::vector<std::string> events;
+        serializer.deserialize("events", events);
+        for (auto& event : events)
+        {
+            auto eventmap = split(event, ',');
+            uint64_t id = std::stoull(std::string(eventmap[0]));
+            addEvent(event, id);
+        }
+    }
+    void store()
+    {
+        std::vector<std::string> events;
+        for (auto& [id, event] : this->events)
+        {
+            events.push_back(std::to_string(id) + "," + event);
+        }
+        serializer.serialize("events", events);
+        serializer.store();
     }
 
     u_int64_t epocNow()
@@ -69,6 +111,11 @@ struct EventQueue
             return std::string(vw);
         }
         return event.data();
+    }
+    void removeEvent(uint64_t id)
+    {
+        events.erase(id);
+        store();
     }
     net::awaitable<boost::system::error_code> sendEventHandler(
         uint64_t id, std::reference_wrapper<EventProvider> provider,
@@ -89,12 +136,12 @@ struct EventQueue
             resendEvent(id, provider);
             co_return ec;
         }
-        events.erase(id);
+        removeEvent(id);
         ec = co_await provider.get()(streamer, header);
 
         if (ec)
         {
-            LOG_ERROR("Failed to handle event ret:{} {}", header, ec.message());
+            LOG_INFO("Failed to handle event ret:{} {}", header, ec.message());
             co_return ec;
         }
 
@@ -112,7 +159,12 @@ struct EventQueue
     void addEvent(const std::string& event)
     {
         auto uniqueEventId = epocNow();
-        events[uniqueEventId] = event;
+        addEvent(event, uniqueEventId);
+        store();
+    }
+    void addEvent(const std::string& event, uint64_t id)
+    {
+        events[id] = event;
         auto eventId = getEventId(event);
         auto it = eventProviders.find(eventId);
         if (it == eventProviders.end())
@@ -121,7 +173,7 @@ struct EventQueue
         }
         std::reference_wrapper<EventProvider> provider(it->second);
         taskQueue.addTask(std::bind_front(&EventQueue::sendEventHandler, this,
-                                          uniqueEventId, provider, event));
+                                          id, provider, event));
     }
     bool eventExists(const std::string& event)
     {
@@ -189,4 +241,5 @@ struct EventQueue
     TcpServer<TcpStreamType, EventQueue> tcpServer;
     DefaultEventProvider defaultProvider;
     DefaultEventConsumer defaultConsumer;
+    JsonSerializer serializer;
 };

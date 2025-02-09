@@ -5,7 +5,8 @@
 #include "logger.hpp"
 struct FileSync
 {
-    FileSync(net::any_io_executor io_context, EventQueue& eventQueue) :
+    FileSync(net::any_io_executor io_context, EventQueue& eventQueue,
+             const nlohmann::json& json) :
         watcher(io_context), eventQueue(eventQueue)
     {
         eventQueue.addEventProvider(
@@ -34,6 +35,11 @@ struct FileSync
             });
         boost::asio::co_spawn(io_context, watchFileChanges(watcher, *this),
                               boost::asio::detached);
+        root = json.value("root", std::string{});
+        for (std::string path : json["paths"])
+        {
+            addPath(path);
+        }
     }
     void addPath(const std::string& path)
     {
@@ -79,7 +85,6 @@ struct FileSync
     {
         if (event.find("FileModified") != std::string::npos)
         {
-            std::string root = "/tmp";
             auto path = event.substr(event.find(':') + 1);
             co_await sendHeader(streamer, std::format("Fetch:{}", path));
 
@@ -91,4 +96,5 @@ struct FileSync
     ~FileSync() {}
     FileWatcher watcher;
     EventQueue& eventQueue;
+    std::string root;
 };
