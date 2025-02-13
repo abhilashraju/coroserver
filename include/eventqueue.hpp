@@ -83,7 +83,7 @@ struct EventQueue
         {
             auto eventmap = split(event, ',');
             uint64_t id = std::stoull(std::string(eventmap[0]));
-            addEvent(event, id);
+            addEvent(std::string(eventmap[1]), id);
         }
     }
     void store()
@@ -115,7 +115,6 @@ struct EventQueue
     void removeEvent(uint64_t id)
     {
         events.erase(id);
-        store();
     }
     net::awaitable<boost::system::error_code>
         executeProvider(std::reference_wrapper<EventProvider> provider,
@@ -174,7 +173,6 @@ struct EventQueue
     {
         auto uniqueEventId = epocNow();
         addEvent(event, uniqueEventId);
-        store();
     }
     void addEvent(const std::string& event, uint64_t id)
     {

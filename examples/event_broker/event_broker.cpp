@@ -10,6 +10,27 @@
 
 #include <nlohmann/json.hpp>
 
+#include <csignal>
+EventQueue* eventQueue{nullptr};
+void signalHandler(int signal)
+{
+    if (signal == SIGTERM || signal == SIGINT)
+    {
+        LOG_INFO("Termination signal received, storing event queue...");
+        if (eventQueue)
+        {
+            eventQueue->store();
+        }
+        exit(0);
+    }
+}
+
+void setupSignalHandlers()
+{
+    std::signal(SIGTERM, signalHandler);
+    std::signal(SIGINT, signalHandler);
+}
+
 net::awaitable<boost::system::error_code>
     hiProvider(Streamer streamer, const std::string& eventReplay)
 {
@@ -86,6 +107,7 @@ int main(int argc, const char* argv[])
         eventQueue.addEvent(event);
     }
     eventQueue.load();
+    setupSignalHandlers();
     io_context.run();
     return 0;
 }
