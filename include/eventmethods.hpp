@@ -6,9 +6,23 @@
 static constexpr auto DONE = "Done";
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 namespace fs = std::filesystem;
-inline std::string makeEvent(const std::string& id, const std::string& data)
+inline std::string makeEvent(const std::string& id, const std::string& data,
+                             const std::string& delim = "\r\n")
 {
-    return std::format("{}:{}\r\n", id, data);
+    return std::format("{}:{}{}", id, data, delim);
+}
+inline std::string makeEvent(const std::string& data)
+{
+    return std::format("{}\r\n", data);
+}
+inline std::pair<std::string, std::string> parseEvent(const std::string& event)
+{
+    auto pos = event.find(':');
+    if (pos == std::string::npos)
+    {
+        return {event, ""};
+    }
+    return {event.substr(0, pos), event.substr(pos + 1)};
 }
 inline AwaitableResult<size_t> readData(Streamer streamer,
                                         net::mutable_buffer buffer)
@@ -93,6 +107,7 @@ net::awaitable<boost::system::error_code>
         }
         co_await sendData(streamer, net::buffer(data));
         fileSize -= data.size();
+        LOG_INFO("Remaining: {} to send", fileSize);
     }
     co_return boost::system::error_code{};
 }
@@ -120,8 +135,8 @@ net::awaitable<boost::system::error_code>
         std::ofstream file(filePath, std::ios::binary);
         if (!file.is_open())
         {
-            LOG_ERROR("File not found: {}", filePath);
-            co_return boost::system::error_code{};
+            LOG_ERROR("File: {} open failed for write", filePath);
+            co_return boost::asio::error::operation_aborted;
         }
         std::array<char, 1024> data;
         while (size > 0)
@@ -134,6 +149,7 @@ net::awaitable<boost::system::error_code>
             }
             file.write(data.data(), bytes);
             size -= bytes;
+            LOG_INFO("Remaining : {} bytes to recieve", size);
         }
         co_return boost::system::error_code{};
     }

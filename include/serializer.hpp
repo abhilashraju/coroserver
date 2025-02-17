@@ -93,6 +93,7 @@ class JsonSerializer
         std::ofstream file(serPath.data());
         if (file.is_open())
         {
+            LOG_INFO("Storing data {} to  {}", jsonData.dump(4), serPath);
             file << jsonData.dump(4); // Pretty print with 4 spaces
             file.close();
             return true;

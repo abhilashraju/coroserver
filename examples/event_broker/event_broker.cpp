@@ -7,19 +7,20 @@
 #include "file_sync.hpp"
 #include "file_watcher.hpp"
 #include "logger.hpp"
+#include "shared_library.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <csignal>
-EventQueue* eventQueue{nullptr};
+EventQueue* peventQueue{nullptr};
 void signalHandler(int signal)
 {
     if (signal == SIGTERM || signal == SIGINT)
     {
         LOG_INFO("Termination signal received, storing event queue...");
-        if (eventQueue)
+        if (peventQueue)
         {
-            eventQueue->store();
+            peventQueue->store();
         }
         exit(0);
     }
@@ -39,12 +40,11 @@ net::awaitable<boost::system::error_code>
     co_return boost::system::error_code{};
 }
 net::awaitable<boost::system::error_code>
-    hiConsumer(Streamer streamer, const std::string& eventReplay)
+    publisher(Streamer streamer, const std::string& event)
 {
-    LOG_DEBUG("Received event: {}", eventReplay);
-    co_await sendHeader(streamer, "How are you?");
-    auto [ec, message] = co_await readHeader(streamer);
-    LOG_DEBUG("Received event: {}", message);
+    LOG_DEBUG("Received Event for publish: {}", event);
+    auto [id, data] = parseEvent(event);
+    peventQueue->addEvent(makeEvent(data));
     co_return boost::system::error_code{};
 }
 
@@ -65,6 +65,7 @@ int main(int argc, const char* argv[])
     auto rp = json.value("remote-port", std::string{});
     auto port = json.value("port", std::string{});
     auto maxConnections = json.value("max-connections", 1);
+    auto pluginfolder = json.value("plugins-folder", "/usr/bin/plugins");
 
     reactor::Logger<std::ostream>& logger = reactor::getLogger();
     logger.setLogLevel(reactor::LogLevel::INFO);
@@ -90,15 +91,30 @@ int main(int argc, const char* argv[])
                            ssl_server_context);
     EventQueue eventQueue(io_context.get_executor(), acceptor,
                           ssl_client_context, dest, rp, maxConnections);
-
+    peventQueue = &eventQueue;
     FileSync fileSync(io_context.get_executor(), eventQueue,
                       json.value("file-sync", nlohmann::json{}));
 
     DbusSync dbusSync(*conn, eventQueue,
                       json.value("dbus-sync", nlohmann::json{}));
 
-    eventQueue.addEventProvider("Hi", hiProvider);
-    eventQueue.addEventConsumer("Hi", hiConsumer);
+    // eventQueue.addEventProvider("Hi", hiProvider);
+    eventQueue.addEventConsumer("Publish", publisher);
+    PluginDb db(pluginfolder);
+    auto pInterfaces = db.getInterFaces<EventBrokerPlugin>();
+    for (auto& plugin : pInterfaces)
+    {
+        auto providers = plugin->getProviders();
+        for (auto& [id, provider] : providers)
+        {
+            eventQueue.addEventProvider(id, provider);
+        }
+        auto consumers = plugin->getConsumers();
+        for (auto& [id, consumer] : consumers)
+        {
+            eventQueue.addEventConsumer(id, consumer);
+        }
+    }
 
     std::vector<std::string> events{makeEvent("Hello", "World"),
                                     makeEvent("Hi", "World")};

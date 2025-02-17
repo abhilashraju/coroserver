@@ -1,4 +1,5 @@
 #pragma once
+#include "eventmethods.hpp"
 #include "serializer.hpp"
 #include "taskqueue.hpp"
 #include "tcp_server.hpp"
@@ -21,10 +22,6 @@ struct EventQueue
             operator()(Streamer streamer, const std::string& event)
         {
             LOG_WARNING("Received event in defualt provider: {}", event);
-            if (event == DONE)
-            {
-                co_return boost::asio::error::connection_reset;
-            }
             co_return boost::system::error_code{};
         }
     };
@@ -135,6 +132,7 @@ struct EventQueue
         uint64_t id, std::reference_wrapper<EventProvider> provider,
         const std::string& event, Streamer streamer)
     {
+        boost::system::error_code retCode{boost::asio::error::connection_reset};
         auto [ec, size] = co_await streamer.write(net::buffer(event), false);
         if (ec)
         {
@@ -150,16 +148,19 @@ struct EventQueue
             resendEvent(id, provider);
             co_return ec;
         }
-        removeEvent(id);
-        ec = co_await executeProvider(provider, streamer, header);
 
+        if (header == DONE)
+        {
+            removeEvent(id);
+            co_return retCode;
+        }
+        ec = co_await executeProvider(provider, streamer, header);
+        removeEvent(id);
         if (ec)
         {
             co_return ec;
         }
-
-        auto [ec1, done] = co_await readHeader(streamer);
-        co_return boost::asio::error::connection_reset;
+        co_return retCode;
         // co_return ec;
     }
     void resendEvent(uint64_t id,
@@ -248,12 +249,7 @@ struct EventQueue
         while (true)
         {
             auto ec = co_await next(streamer);
-            if (ec == boost::asio::error::operation_aborted)
-            {
-                LOG_INFO("Operation Aborted");
-                continue;
-            }
-            else if (ec)
+            if (ec)
             {
                 LOG_DEBUG("Failed to handle client: {}", ec.message());
                 co_return;
