@@ -155,11 +155,13 @@ struct EventQueue
             co_return retCode;
         }
         ec = co_await executeProvider(provider, streamer, header);
-        removeEvent(id);
+
         if (ec)
         {
+            resendEvent(id, provider);
             co_return ec;
         }
+        removeEvent(id);
         co_return retCode;
         // co_return ec;
     }
@@ -167,6 +169,13 @@ struct EventQueue
                      std::reference_wrapper<EventProvider> provider)
     {
         const auto& event = events[id];
+        auto now = epocNow();
+        if (now - id > 30000)
+        {
+            LOG_ERROR("Exceeded time to live for the event: {}", event);
+            removeEvent(id);
+            return;
+        }
         taskQueue.addTask(std::bind_front(&EventQueue::sendEventHandler, this,
                                           id, provider, event));
     }

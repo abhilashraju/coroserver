@@ -1,4 +1,5 @@
 #pragma once
+#include "file_io.hpp"
 #include "tcp_server.hpp"
 
 #include <filesystem>
@@ -78,16 +79,30 @@ net::awaitable<boost::system::error_code> sendDone(Streamer streamer)
 net::awaitable<boost::system::error_code>
     sendFile(Streamer streamer, const std::string& filePath)
 {
-    std::ifstream file(filePath, std::ios::binary);
-    if (!file.is_open())
+    // std::ifstream file(filePath, std::ios::binary);
+    // if (!file.is_open())
+    // {
+    //     LOG_ERROR("File not found: {}", filePath);
+    //     auto [ec, size] = co_await sendHeader(streamer, "FileNotFound:");
+    //     co_return ec ? ec : boost::system::error_code{};
+    // }
+    // file.seekg(0, std::ios::end);
+    // auto fileSize = static_cast<std::size_t>(file.tellg());
+    // file.seekg(0, std::ios::beg);
+    int fd = ::open(filePath.c_str(), O_RDONLY);
+    if (fd == -1)
     {
-        LOG_ERROR("File not found: {}", filePath);
-        auto [ec, size] = co_await sendHeader(streamer, "FileNotFound:");
-        co_return ec ? ec : boost::system::error_code{};
+        LOG_ERROR("File: {} open failed for read", filePath);
+        co_return boost::asio::error::operation_aborted;
     }
-    file.seekg(0, std::ios::end);
-    auto fileSize = static_cast<std::size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
+    auto fileSize = lseek(fd, 0, SEEK_END);
+    if (fileSize == -1)
+    {
+        LOG_ERROR("Failed to get file size: {}", filePath);
+        co_return boost::asio::error::operation_aborted;
+    }
+    lseek(fd, 0, SEEK_SET);
+    AsyncFileReader reader(co_await net::this_coro::executor, fd);
 
     auto [ec, size] =
         co_await sendHeader(streamer, std::format("Content-Size:{}", fileSize));
@@ -99,15 +114,23 @@ net::awaitable<boost::system::error_code>
     std::array<char, 1024> data;
     while (fileSize > 0)
     {
-        file.read(data.data(), data.size());
-        if (file.eof())
+        auto [ec, bytes] = co_await reader.read(net::buffer(data));
+        if (ec && ec != boost::asio::error::eof)
         {
-            co_await sendData(streamer, net::buffer(data, file.gcount()));
-            break;
+            LOG_ERROR("Failed to read from file: {}", ec.message());
+            co_return ec;
         }
-        co_await sendData(streamer, net::buffer(data));
-        fileSize -= data.size();
-        LOG_INFO("Remaining: {} to send", fileSize);
+        size_t byteSent = 0;
+        std::tie(ec, byteSent) =
+            co_await sendData(streamer, net::buffer(data.data(), bytes));
+        if (ec)
+        {
+            LOG_ERROR("Failed to write to stream: {}", ec.message());
+            co_return ec;
+        }
+
+        fileSize -= bytes;
+        LOG_DEBUG("Remaining: {} to send", fileSize);
     }
     co_return boost::system::error_code{};
 }
@@ -132,13 +155,15 @@ net::awaitable<boost::system::error_code>
             fs::create_directories(
                 std::filesystem::path(filePath).parent_path());
         }
-        std::ofstream file(filePath, std::ios::binary);
-        if (!file.is_open())
+        int fd = ::open(filePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd == -1)
         {
             LOG_ERROR("File: {} open failed for write", filePath);
             co_return boost::asio::error::operation_aborted;
         }
+        AsyncFileWriter writer(co_await net::this_coro::executor, fd);
         std::array<char, 1024> data;
+
         while (size > 0)
         {
             auto [ec, bytes] = co_await readData(streamer, net::buffer(data));
@@ -147,9 +172,15 @@ net::awaitable<boost::system::error_code>
                 LOG_ERROR("Failed to read from stream: {}", ec.message());
                 co_return ec;
             }
-            file.write(data.data(), bytes);
+            ec = co_await writer.write(net::buffer(data.data(), bytes));
+
+            if (ec)
+            {
+                LOG_ERROR("Failed to write to file: {}", ec.message());
+                co_return ec;
+            }
             size -= bytes;
-            LOG_INFO("Remaining : {} bytes to recieve", size);
+            LOG_DEBUG("Remaining : {} bytes to recieve", size);
         }
         co_return boost::system::error_code{};
     }

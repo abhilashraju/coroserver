@@ -41,6 +41,10 @@ class TcpClient
         resolver_(io_context), stream_(io_context, ssl_context),
         timer_(std::make_shared<net::steady_timer>(io_context))
     {}
+    ~TcpClient()
+    {
+        timer_->cancel();
+    }
 
     net::awaitable<boost::system::error_code>
         connect(const std::string& host, const std::string& port)
