@@ -54,7 +54,7 @@ class TcpServer
         else
         {
             auto timer = std::make_shared<net::steady_timer>(context);
-            co_await router(Streamer(*socket, timer));
+            co_await router(Streamer(socket, timer));
             timer->cancel(); // cancel any pending timer
         }
     }

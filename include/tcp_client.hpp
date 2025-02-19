@@ -38,7 +38,9 @@ class TcpClient
 {
   public:
     TcpClient(net::any_io_executor io_context, ssl::context& ssl_context) :
-        resolver_(io_context), stream_(io_context, ssl_context),
+        resolver_(io_context),
+        stream_(std::make_shared<ssl::stream<tcp::socket>>(io_context,
+                                                           ssl_context)),
         timer_(std::make_shared<net::steady_timer>(io_context))
     {}
     ~TcpClient()
@@ -55,12 +57,12 @@ class TcpClient
         TimedStreamer streamer(stream_, timer_);
         streamer.setTimeout(30s);
         co_await net::async_connect(
-            stream_.next_layer(), results,
+            stream_->next_layer(), results,
             net::redirect_error(net::use_awaitable, ec));
         if (ec)
             co_return ec;
         streamer.setTimeout(30s);
-        co_await stream_.async_handshake(
+        co_await stream_->async_handshake(
             ssl::stream_base::client,
             net::redirect_error(net::use_awaitable, ec));
         co_return ec;
@@ -77,7 +79,7 @@ class TcpClient
     }
     ssl::stream<tcp::socket>& stream()
     {
-        return stream_;
+        return *stream_;
     }
     TimedStreamer<ssl::stream<tcp::socket>> streamer()
     {
@@ -86,7 +88,7 @@ class TcpClient
     void close()
     {
         boost::system::error_code ec;
-        stream_.next_layer().close(ec);
+        stream_->next_layer().close(ec);
         if (ec)
         {
             LOG_ERROR("Error closing socket: {}", ec.message());
@@ -94,11 +96,11 @@ class TcpClient
     }
     bool isOpen() const
     {
-        return stream_.lowest_layer().is_open();
+        return stream_->lowest_layer().is_open();
     }
 
   private:
     tcp::resolver resolver_;
-    ssl::stream<tcp::socket> stream_;
+    std::shared_ptr<ssl::stream<tcp::socket>> stream_;
     std::shared_ptr<net::steady_timer> timer_;
 };

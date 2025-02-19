@@ -77,7 +77,7 @@ struct UnixStreamType
 template <typename StreamType>
 struct TimedStreamer
 {
-    TimedStreamer(StreamType& socket,
+    TimedStreamer(std::shared_ptr<StreamType> socket,
                   std::shared_ptr<net::steady_timer> timer) :
         socket(socket), timer(timer)
     {}
@@ -89,7 +89,7 @@ struct TimedStreamer
             setTimeout(30s);
         }
         boost::system::error_code ec;
-        auto bytes = co_await socket.async_read_some(
+        auto bytes = co_await socket->async_read_some(
             data, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
         timer->cancel();
         co_return std::make_pair(ec, bytes);
@@ -101,7 +101,7 @@ struct TimedStreamer
     //     setTimeout(30s);
     //     boost::system::error_code ec;
     //     auto bytes = co_await net::async_read_until(
-    //         socket, buffer, delim,
+    //         *socket, buffer, delim,
     //         boost::asio::redirect_error(net::use_awaitable, ec));
     //     co_return std::make_pair(ec, bytes);
     // }
@@ -147,7 +147,7 @@ struct TimedStreamer
             setTimeout(30s);
         }
         boost::system::error_code ec;
-        auto bytes = co_await socket.async_write_some(
+        auto bytes = co_await socket->async_write_some(
             data, boost::asio::redirect_error(boost::asio::use_awaitable, ec));
         timer->cancel();
         co_return std::make_pair(ec, bytes);
@@ -155,17 +155,18 @@ struct TimedStreamer
     void setTimeout(std::chrono::seconds timeout)
     {
         timer->expires_after(timeout);
-        timer->async_wait([this](const boost::system::error_code& ec) {
-            if (!ec)
-            {
-                socket.next_layer().cancel();
-            }
-        });
+        timer->async_wait(
+            [socket = socket](const boost::system::error_code& ec) {
+                if (!ec)
+                {
+                    socket->next_layer().cancel();
+                }
+            });
     }
     void close()
     {
         boost::system::error_code ec;
-        socket.next_layer().close(ec);
+        socket->next_layer().close(ec);
         if (ec)
         {
             LOG_ERROR("Error closing socket: {}", ec.message());
@@ -173,8 +174,8 @@ struct TimedStreamer
     }
     bool isOpen() const
     {
-        return socket.next_layer().is_open();
+        return socket->next_layer().is_open();
     }
-    StreamType& socket;
+    std::shared_ptr<StreamType> socket;
     std::shared_ptr<net::steady_timer> timer;
 };

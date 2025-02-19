@@ -253,8 +253,8 @@ struct EventQueue
     net::awaitable<void>
         operator()(std::shared_ptr<TcpStreamType::stream_type> socket)
     {
-        auto streamer = Streamer(*socket, std::make_shared<net::steady_timer>(
-                                              socket->get_executor()));
+        auto streamer = Streamer(socket, std::make_shared<net::steady_timer>(
+                                             socket->get_executor()));
         while (true)
         {
             auto ec = co_await next(streamer);
