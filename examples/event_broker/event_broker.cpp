@@ -39,11 +39,45 @@ net::awaitable<boost::system::error_code>
     co_await sendHeader(streamer, "I am good");
     co_return boost::system::error_code{};
 }
-net::awaitable<boost::system::error_code>
-    publisher(Streamer streamer, const std::string& event)
+void addFiletoUpdateRecursive(const std::string& path)
+{
+    if (!std::filesystem::exists(path))
+    {
+        return;
+    }
+    if (std::filesystem::is_directory(path))
+    {
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(path))
+        {
+            addFiletoUpdateRecursive(entry.path().string());
+        }
+    }
+    else
+    {
+        peventQueue->addEvent(makeEvent("FileModified", path));
+    }
+}
+net::awaitable<boost::system::error_code> fullSync(
+    const nlohmann::json& paths, Streamer streamer, const std::string& event)
+{
+    LOG_DEBUG("Received Event for FullSync: {}", event);
+    for (std::string path : paths["paths"])
+    {
+        addFiletoUpdateRecursive(path);
+    }
+    co_return boost::system::error_code{};
+}
+net::awaitable<boost::system::error_code> publisher(
+    const nlohmann::json& paths, Streamer streamer, const std::string& event)
 {
     LOG_DEBUG("Received Event for publish: {}", event);
     auto [id, data] = parseEvent(event);
+    auto [innerID, innerData] = parseEvent(data);
+    if (innerID == "FullSync")
+    {
+        co_return co_await fullSync(paths, streamer, data);
+    }
     peventQueue->addEvent(makeEvent(data));
     co_return boost::system::error_code{};
 }
@@ -99,7 +133,10 @@ int main(int argc, const char* argv[])
                       json.value("dbus-sync", nlohmann::json{}));
 
     // eventQueue.addEventProvider("Hi", hiProvider);
-    eventQueue.addEventConsumer("Publish", publisher);
+    eventQueue.addEventConsumer(
+        "Publish",
+        std::bind_front(publisher, json.value("file-sync", nlohmann::json{})));
+
     PluginDb db(pluginfolder);
     auto pInterfaces = db.getInterFaces<EventBrokerPlugin>();
     for (auto& plugin : pInterfaces)

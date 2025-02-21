@@ -82,6 +82,11 @@ struct PluginDb
 
     PluginDb(const std::filesystem::path& path)
     {
+        if (!std::filesystem::exists(path))
+        {
+            LOG_ERROR("Plugin folder {} does not exist", path.string());
+            return;
+        }
         for (const auto& entry : std::filesystem::directory_iterator(path))
         {
             if (entry.path().extension() == ".dylib" ||
