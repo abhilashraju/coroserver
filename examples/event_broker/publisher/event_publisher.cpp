@@ -7,7 +7,7 @@ int main(int argc, const char* argv[])
 {
     auto [id,
           data] = getArgs(parseCommandline(argc, argv), "--id,-i", "--data,-d");
-    if (!id || !data)
+    if (!id)
     {
         LOG_ERROR("No event id or data provided");
         LOG_ERROR("eg event_broker --id <event id> --data <event data>");
@@ -15,7 +15,7 @@ int main(int argc, const char* argv[])
     }
     net::io_context io_context;
     std::string eventID(*id);
-    std::string eventData(*data);
+    std::string eventData(data ? *data : "*");
     net::co_spawn(
         io_context,
         [&io_context, eventID, eventData]() -> net::awaitable<void> {

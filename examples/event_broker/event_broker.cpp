@@ -59,14 +59,21 @@ void addFiletoUpdateRecursive(const std::string& path)
     }
 }
 net::awaitable<boost::system::error_code> fullSync(
-    const nlohmann::json& paths, Streamer streamer, const std::string& event)
+    const nlohmann::json& paths, Streamer streamer, const std::string& data)
 {
-    LOG_DEBUG("Received Event for FullSync: {}", event);
-    for (std::string path : paths["paths"])
+    if (data == "*")
     {
-        addFiletoUpdateRecursive(path);
+        LOG_DEBUG("Received Event for FullSync: {}", data);
+        for (std::string path : paths["paths"])
+        {
+            addFiletoUpdateRecursive(path);
+        }
+        co_return boost::system::error_code{};
     }
-    co_return boost::system::error_code{};
+    if (fs::exists(data))
+    {
+        addFiletoUpdateRecursive(data);
+    }
 }
 net::awaitable<boost::system::error_code> publisher(
     const nlohmann::json& paths, Streamer streamer, const std::string& event)
@@ -76,7 +83,7 @@ net::awaitable<boost::system::error_code> publisher(
     auto [innerID, innerData] = parseEvent(data);
     if (innerID == "FullSync")
     {
-        co_return co_await fullSync(paths, streamer, data);
+        co_return co_await fullSync(paths, streamer, innerData);
     }
     peventQueue->addEvent(makeEvent(data));
     co_return boost::system::error_code{};
