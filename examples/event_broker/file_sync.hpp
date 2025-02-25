@@ -90,6 +90,26 @@ struct FileSync
 
             co_return co_await recieveFile(streamer, root + path);
         }
+        if (event.find("FileDeleted") != std::string::npos)
+        {
+            auto path = event.substr(event.find(':') + 1);
+            co_return co_await deleteFile(path);
+        }
+        co_return boost::system::error_code{};
+    }
+    net::awaitable<boost::system::error_code>
+        deleteFile(const std::string& path) const
+    {
+        try
+        {
+            std::filesystem::remove(root + path);
+        }
+        catch (std::exception& e)
+        {
+            LOG_ERROR("Error deleting file: {}", e.what());
+            co_return boost::system::error_code{
+                1, boost::system::system_category()};
+        }
         co_return boost::system::error_code{};
     }
 

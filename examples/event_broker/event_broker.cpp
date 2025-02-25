@@ -99,75 +99,83 @@ int main(int argc, const char* argv[])
 
         return 1;
     }
-    auto json = nlohmann::json::parse(std::ifstream(conf.value().data()));
-
-    auto dest = json.value("remote", std::string{});
-    auto cert = json.value("cert", std::string{});
-    auto rp = json.value("remote-port", std::string{});
-    auto port = json.value("port", std::string{});
-    auto maxConnections = json.value("max-connections", 1);
-    auto pluginfolder = json.value("plugins-folder", "/usr/bin/plugins");
-
-    reactor::Logger<std::ostream>& logger = reactor::getLogger();
-    logger.setLogLevel(reactor::LogLevel::INFO);
-    net::io_context io_context;
-    auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
-    ssl::context ssl_server_context(ssl::context::sslv23_server);
-
-    // Load server certificate and private key
-    ssl_server_context.set_options(
-        boost::asio::ssl::context::default_workarounds |
-        boost::asio::ssl::context::no_sslv2 |
-        boost::asio::ssl::context::single_dh_use);
-    if (!cert.empty())
+    try
     {
-        ssl_server_context.use_certificate_chain_file(
-            cert + std::string("/server-cert.pem"));
-        ssl_server_context.use_private_key_file(
-            cert + std::string("/server-key.pem"),
-            boost::asio::ssl::context::pem);
-    }
-    ssl::context ssl_client_context(ssl::context::sslv23_client);
-    TcpStreamType acceptor(io_context.get_executor(), std::atoi(port.data()),
-                           ssl_server_context);
-    EventQueue eventQueue(io_context.get_executor(), acceptor,
-                          ssl_client_context, dest, rp, maxConnections);
-    peventQueue = &eventQueue;
-    FileSync fileSync(io_context.get_executor(), eventQueue,
-                      json.value("file-sync", nlohmann::json{}));
+        auto json = nlohmann::json::parse(std::ifstream(conf.value().data()));
 
-    DbusSync dbusSync(*conn, eventQueue,
-                      json.value("dbus-sync", nlohmann::json{}));
+        auto dest = json.value("remote", std::string{});
+        auto cert = json.value("cert", std::string{});
+        auto rp = json.value("remote-port", std::string{});
+        auto port = json.value("port", std::string{});
+        auto maxConnections = json.value("max-connections", 1);
+        auto pluginfolder = json.value("plugins-folder", "/usr/bin/plugins");
 
-    // eventQueue.addEventProvider("Hi", hiProvider);
-    eventQueue.addEventConsumer(
-        "Publish",
-        std::bind_front(publisher, json.value("file-sync", nlohmann::json{})));
+        reactor::Logger<std::ostream>& logger = reactor::getLogger();
+        logger.setLogLevel(reactor::LogLevel::INFO);
+        net::io_context io_context;
+        auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
+        ssl::context ssl_server_context(ssl::context::sslv23_server);
 
-    PluginDb db(pluginfolder);
-    auto pInterfaces = db.getInterFaces<EventBrokerPlugin>();
-    for (auto& plugin : pInterfaces)
-    {
-        auto providers = plugin->getProviders();
-        for (auto& [id, provider] : providers)
+        // Load server certificate and private key
+        ssl_server_context.set_options(
+            boost::asio::ssl::context::default_workarounds |
+            boost::asio::ssl::context::no_sslv2 |
+            boost::asio::ssl::context::single_dh_use);
+        if (!cert.empty())
         {
-            eventQueue.addEventProvider(id, provider);
+            ssl_server_context.use_certificate_chain_file(
+                cert + std::string("/server-cert.pem"));
+            ssl_server_context.use_private_key_file(
+                cert + std::string("/server-key.pem"),
+                boost::asio::ssl::context::pem);
         }
-        auto consumers = plugin->getConsumers();
-        for (auto& [id, consumer] : consumers)
-        {
-            eventQueue.addEventConsumer(id, consumer);
-        }
-    }
+        ssl::context ssl_client_context(ssl::context::sslv23_client);
+        TcpStreamType acceptor(io_context.get_executor(),
+                               std::atoi(port.data()), ssl_server_context);
+        EventQueue eventQueue(io_context.get_executor(), acceptor,
+                              ssl_client_context, dest, rp, maxConnections);
+        peventQueue = &eventQueue;
+        FileSync fileSync(io_context.get_executor(), eventQueue,
+                          json.value("file-sync", nlohmann::json{}));
 
-    std::vector<std::string> events{makeEvent("Hello", "World"),
-                                    makeEvent("Hi", "World")};
-    for (auto& event : events)
-    {
-        eventQueue.addEvent(event);
+        DbusSync dbusSync(*conn, eventQueue,
+                          json.value("dbus-sync", nlohmann::json{}));
+
+        // eventQueue.addEventProvider("Hi", hiProvider);
+        eventQueue.addEventConsumer(
+            "Publish",
+            std::bind_front(publisher,
+                            json.value("file-sync", nlohmann::json{})));
+
+        PluginDb db(pluginfolder);
+        auto pInterfaces = db.getInterFaces<EventBrokerPlugin>();
+        for (auto& plugin : pInterfaces)
+        {
+            auto providers = plugin->getProviders();
+            for (auto& [id, provider] : providers)
+            {
+                eventQueue.addEventProvider(id, provider);
+            }
+            auto consumers = plugin->getConsumers();
+            for (auto& [id, consumer] : consumers)
+            {
+                eventQueue.addEventConsumer(id, consumer);
+            }
+        }
+
+        std::vector<std::string> events{makeEvent("Hello", "World"),
+                                        makeEvent("Hi", "World")};
+        for (auto& event : events)
+        {
+            eventQueue.addEvent(event);
+        }
+        eventQueue.load();
+        setupSignalHandlers();
+        io_context.run();
     }
-    eventQueue.load();
-    setupSignalHandlers();
-    io_context.run();
+    catch (const std::exception& e)
+    {
+        LOG_ERROR("Exception: {}", e.what());
+    }
     return 0;
 }
