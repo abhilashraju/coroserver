@@ -45,7 +45,10 @@ struct FileWatcher
     void addToWatch(const std::string& path)
     {
         int wd = inotify_add_watch(stream_.native_handle(), path.c_str(),
-                                   IN_MODIFY | IN_CREATE | IN_DELETE);
+                                   std::filesystem::is_directory(path)
+                                       ? IN_MODIFY | IN_CREATE | IN_DELETE
+                                       : IN_MODIFY);
+
         if (wd < 0)
         {
             throw std::runtime_error("Failed to add inotify watch");
@@ -54,19 +57,21 @@ struct FileWatcher
     }
     void addToWatchRecursive(const std::string& path)
     {
-        if (!std::filesystem::exists(path) &&
-            !std::filesystem::is_directory(path))
+        if (!std::filesystem::exists(path))
         {
-            throw std::runtime_error("Path does not exist or not a directory");
+            LOG_ERROR("Path does not exist or is not a directory: {}", path);
+            return;
         }
         addToWatch(path);
-
-        for (const auto& entry :
-             std::filesystem::recursive_directory_iterator(path))
+        if (std::filesystem::is_directory(path))
         {
-            if (entry.is_directory())
+            for (const auto& entry :
+                 std::filesystem::recursive_directory_iterator(path))
             {
-                addToWatch(entry.path().string());
+                if (entry.is_directory())
+                {
+                    addToWatch(entry.path().string());
+                }
             }
         }
     }
@@ -88,12 +93,12 @@ struct FileWatcher
         for (std::size_t i = 0; i < length;)
         {
             inotify_event* event = reinterpret_cast<inotify_event*>(&buffer[i]);
+            auto path = watch_fds.at(event->wd);
             if (event->len > 0)
             {
-                auto path = watch_fds.at(event->wd) + "/" + event->name;
-                events[path] = *event;
+                path += std::string("/") + event->name;
             }
-
+            events[path] = *event;
             i += sizeof(inotify_event) + event->len;
         }
 
@@ -133,8 +138,8 @@ concept FileChangeHandler =
         { h(path, status) } -> std::same_as<void>;
     };
 template <FileChangeHandler Handler>
-inline boost::asio::awaitable<void>
-    watchFileChanges(FileWatcher& watcher, Handler& handler)
+inline boost::asio::awaitable<void> watchFileChanges(FileWatcher& watcher,
+                                                     Handler& handler)
 {
     co_await watcher.watchForChanges(handler);
 }
