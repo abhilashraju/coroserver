@@ -29,24 +29,27 @@ inline auto awaitable_dbus_method_call(
 }
 
 template <typename Type>
-inline AwaitableResult<Type>
-    getProperty(sdbusplus::asio::connection& conn, const std::string& service,
-                const std::string& objpath, const std::string& interf,
-                const std::string& property)
+inline AwaitableResult<Type> getProperty(
+    sdbusplus::asio::connection& conn, const std::string& service,
+    const std::string& objpath, const std::string& interf,
+    const std::string& property)
 {
     auto [ec, value] =
         co_await awaitable_dbus_method_call<std::variant<std::monostate, Type>>(
             conn, service, objpath, "org.freedesktop.DBus.Properties", "Get",
             interf, property);
-
+    if (ec)
+    {
+        co_return ReturnTuple<Type>{ec, Type{}};
+    }
     co_return ReturnTuple<Type>{ec, std::get<Type>(value)};
 }
 
 template <typename InputArgs>
-inline AwaitableResult<boost::system::error_code>
-    setProperty(sdbusplus::asio::connection& conn, const std::string& service,
-                const std::string& objpath, const std::string& interf,
-                const std::string& property, const InputArgs& value)
+inline AwaitableResult<boost::system::error_code> setProperty(
+    sdbusplus::asio::connection& conn, const std::string& service,
+    const std::string& objpath, const std::string& interf,
+    const std::string& property, const InputArgs& value)
 {
     auto h =
         make_awaitable_handler<boost::system::error_code>([&](auto promise) {
@@ -80,9 +83,9 @@ inline AwaitableResult<std::vector<std::pair<std::string, VariantType>>>
 }
 
 template <typename SubTreeType>
-inline AwaitableResult<SubTreeType>
-    getSubTree(sdbusplus::asio::connection& bus, const std::string& path,
-               int depth, const std::vector<std::string>& interfaces = {})
+inline AwaitableResult<SubTreeType> getSubTree(
+    sdbusplus::asio::connection& bus, const std::string& path, int depth,
+    const std::vector<std::string>& interfaces = {})
 {
     auto h = make_awaitable_handler<SubTreeType>([&](auto promise) {
         bus.async_method_call(
@@ -99,9 +102,9 @@ inline AwaitableResult<SubTreeType>
 }
 
 template <typename Dict>
-inline AwaitableResult<Dict>
-    getObjects(sdbusplus::asio::connection& bus, const std::string& path,
-               const std::vector<std::string>& interfaces = {})
+inline AwaitableResult<Dict> getObjects(
+    sdbusplus::asio::connection& bus, const std::string& path,
+    const std::vector<std::string>& interfaces = {})
 {
     auto h = make_awaitable_handler<Dict>([&](auto promise) {
         bus.async_method_call(
@@ -116,9 +119,9 @@ inline AwaitableResult<Dict>
     co_return co_await h();
 }
 template <typename Dict>
-inline AwaitableResult<Dict>
-    getSubTreePaths(sdbusplus::asio::connection& bus, const std::string& path,
-                    int depth, const std::vector<std::string>& interfaces = {})
+inline AwaitableResult<Dict> getSubTreePaths(
+    sdbusplus::asio::connection& bus, const std::string& path, int depth,
+    const std::vector<std::string>& interfaces = {})
 {
     auto h = make_awaitable_handler<Dict>([&](auto promise) {
         bus.async_method_call(
@@ -134,11 +137,11 @@ inline AwaitableResult<Dict>
     co_return co_await h();
 }
 template <typename Dict>
-inline AwaitableResult<Dict>
-    getAssociatedSubTree(sdbusplus::asio::connection& bus,
-                         const sdbusplus::message::object_path& associatedPath,
-                         const sdbusplus::message::object_path& path, int depth,
-                         const std::vector<std::string>& interfaces = {})
+inline AwaitableResult<Dict> getAssociatedSubTree(
+    sdbusplus::asio::connection& bus,
+    const sdbusplus::message::object_path& associatedPath,
+    const sdbusplus::message::object_path& path, int depth,
+    const std::vector<std::string>& interfaces = {})
 {
     auto h = make_awaitable_handler<Dict>([&](auto promise) {
         bus.async_method_call(
@@ -220,9 +223,9 @@ inline AwaitableResult<Dict> getAssociatedSubTreePathsById(
 }
 
 template <typename Dict>
-inline AwaitableResult<Dict>
-    getDbusObject(sdbusplus::asio::connection& bus, const std::string& path,
-                  const std::vector<std::string>& interfaces = {})
+inline AwaitableResult<Dict> getDbusObject(
+    sdbusplus::asio::connection& bus, const std::string& path,
+    const std::vector<std::string>& interfaces = {})
 {
     auto h = make_awaitable_handler<Dict>([&](auto promise) {
         bus.async_method_call(
@@ -263,9 +266,9 @@ inline AwaitableResult<Dict> getManagedObjects(
     co_return co_await h();
 }
 template <typename Dict>
-inline AwaitableResult<Dict>
-    getAncestors(sdbusplus::asio::connection& bus, const std::string& path,
-                 const std::vector<std::string>& interfaces = {})
+inline AwaitableResult<Dict> getAncestors(
+    sdbusplus::asio::connection& bus, const std::string& path,
+    const std::vector<std::string>& interfaces = {})
 {
     auto h = make_awaitable_handler<Dict>([&](auto promise) {
         bus.async_method_call(
@@ -281,9 +284,9 @@ inline AwaitableResult<Dict>
     co_return co_await h();
 }
 
-inline AwaitableResult<std::string>
-    introspect(sdbusplus::asio::connection& bus, const std::string& service,
-               const sdbusplus::message::object_path& path)
+inline AwaitableResult<std::string> introspect(
+    sdbusplus::asio::connection& bus, const std::string& service,
+    const sdbusplus::message::object_path& path)
 {
     auto h = make_awaitable_handler<std::string>([&](auto promise) {
         bus.async_method_call(

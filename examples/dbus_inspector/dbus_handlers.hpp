@@ -1,11 +1,13 @@
 #pragma once
 #include "dbus_types.hpp"
+#include "eventmethods.hpp"
 #include "http_server.hpp"
 #include "logger.hpp"
-
 struct DbusHandlers
 {
+    using SubScriberMap = std::map<std::string, sdbusplus::bus::match::match>;
     sdbusplus::asio::connection& conn;
+    SubScriberMap subscribers;
     DbusHandlers(sdbusplus::asio::connection& conn, HttpRouter& router) :
         conn(conn)
     {
@@ -36,6 +38,55 @@ struct DbusHandlers
         router.add_post_handler(
             "/setProperty",
             std::bind_front(&DbusHandlers::setDbusProperty, this));
+        router.add_post_handler(
+            "/subscribe", std::bind_front(&DbusHandlers::subscribe, this));
+    }
+    void matchHandler(const std::string& path, const std::string& property,
+                      sdbusplus::message::message& msg)
+    {
+        std::string interfaceName;
+        std::map<std::string, std::variant<std::string>> changedProperties;
+        std::vector<std::string> invalidatedProperties;
+
+        msg.read(interfaceName, changedProperties, invalidatedProperties);
+
+        LOG_INFO("Properties changed on interface: {}", interfaceName);
+
+        changedProperties |
+            std::ranges::views::filter(
+
+                [&property](const auto& p) { return p.first == property; });
+        for (const auto& [prop, value] : changedProperties)
+        {
+            auto event = makeEvent("PropertyChanged",
+                                   path + ":" + interfaceName + ":" + prop +
+                                       ":" + std::get<std::string>(value));
+            LOG_INFO("Event: {}", event);
+        }
+    }
+    net::awaitable<Response> subscribe(Request& req,
+                                       const http_function& params)
+    {
+        nlohmann::json data;
+
+        data = nlohmann::json::parse(req.body(), nullptr, false);
+
+        if (data.is_discarded())
+        {
+            co_return make_bad_request_error("Invalid JSON", req.version());
+        }
+        std::string path = data["path"];
+        std::string property = data["property"];
+
+        subscribers.emplace(
+            path + property,
+            sdbusplus::bus::match::match(
+                conn,
+                sdbusplus::bus::match::rules::propertiesChanged(path, property),
+                std::bind_front(&DbusHandlers::matchHandler, this, path,
+                                property)));
+        co_return make_success_response("Subscribed", http::status::ok,
+                                        req.version());
     }
 
     net::awaitable<Response> getSubTree(Request& req,
@@ -87,8 +138,8 @@ struct DbusHandlers
         co_return make_success_response(jsonResponse, http::status::ok,
                                         req.version());
     }
-    net::awaitable<Response>
-        getAssociatedSubTree(Request& req, const http_function& params)
+    net::awaitable<Response> getAssociatedSubTree(Request& req,
+                                                  const http_function& params)
     {
         nlohmann::json data;
 
@@ -113,8 +164,8 @@ struct DbusHandlers
         co_return make_success_response(jsonResponse, http::status::ok,
                                         req.version());
     }
-    net::awaitable<Response>
-        getAssociatedSubTreePaths(Request& req, const http_function& params)
+    net::awaitable<Response> getAssociatedSubTreePaths(
+        Request& req, const http_function& params)
     {
         nlohmann::json data;
 
@@ -164,8 +215,8 @@ struct DbusHandlers
         co_return make_success_response(jsonResponse, http::status::ok,
                                         req.version());
     }
-    net::awaitable<Response>
-        getAssociationEndpoints(Request& req, const http_function& params)
+    net::awaitable<Response> getAssociationEndpoints(
+        Request& req, const http_function& params)
     {
         nlohmann::json data;
 
@@ -320,20 +371,29 @@ struct DbusHandlers
         const std::string& path, const std::string& interface,
         const std::string& property)>;
     template <typename T>
-    static net::awaitable<nlohmann::json>
-        getProperty(sdbusplus::asio::connection& conn,
-                    const std::string& service, const std::string& path,
-                    const std::string& interface, const std::string& property)
+    static net::awaitable<nlohmann::json> getProperty(
+        sdbusplus::asio::connection& conn, const std::string& service,
+        const std::string& path, const std::string& interface,
+        const std::string& property)
     {
-        auto [ec, value] =
-            co_await ::getProperty<T>(conn, service, path, interface, property);
-        nlohmann::json ret;
-        if (ec)
+        try
         {
+            auto [ec, value] = co_await ::getProperty<T>(conn, service, path,
+                                                         interface, property);
+            nlohmann::json ret;
+            if (ec)
+            {
+                LOG_ERROR("Error getting DBus property: {}", ec.message());
+                co_return ret;
+            }
+            ret["property"] = value;
             co_return ret;
         }
-        ret["property"] = value;
-        co_return ret;
+        catch (const std::exception& e)
+        {
+            LOG_ERROR("Error getting DBus property: {}", e.what());
+            co_return nlohmann::json();
+        }
     }
     std::map<std::string, PropertyGetter> propertyGetters = {
         {"b", &DbusHandlers::getProperty<bool>},
@@ -348,6 +408,7 @@ struct DbusHandlers
 
         if (data.is_discarded())
         {
+            LOG_ERROR("Invalid JSON {}", req.body());
             co_return make_bad_request_error("Invalid JSON", req.version());
         }
         std::string signature = data["signature"];

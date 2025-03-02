@@ -1,13 +1,16 @@
 
+#include "command_line_parser.hpp"
 #include "dbus_handlers.hpp"
 
 #include <iostream>
 #include <optional>
 #include <string>
-int main()
+int main(int argc, const char* argv[])
 {
     try
     {
+        auto [cert] = getArgs(parseCommandline(argc, argv), "--cert,-c");
+
         boost::asio::io_context io_context;
 
         auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
@@ -20,9 +23,14 @@ int main()
                                 boost::asio::ssl::context::no_sslv2 |
                                 boost::asio::ssl::context::single_dh_use);
         std::cerr << "Cert Loading: \n";
-        ssl_context.use_certificate_chain_file(
-            "/etc/ssl/private/server-cert.pem");
-        ssl_context.use_private_key_file("/etc/ssl/private/server-key.pem",
+        std::string certDir = "/etc/ssl/private";
+        if (cert)
+        {
+            certDir = std::string(*cert);
+        }
+
+        ssl_context.use_certificate_chain_file(certDir + "/server-cert.pem");
+        ssl_context.use_private_key_file(certDir + "/server-key.pem",
                                          boost::asio::ssl::context::pem);
         std::cerr << "Cert Loaded: \n";
         HttpRouter router;
@@ -32,6 +40,7 @@ int main()
         DbusHandlers dbusHandlers(*conn, router);
         io_context.run();
     }
+
     catch (std::exception& e)
     {
         LOG_ERROR("Exception: {}", e.what());

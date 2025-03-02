@@ -36,10 +36,10 @@ sysconfdir = "/etc/ssl/private"
 do_install() {
     install -d ${D}${bindir}
     #install -d ${D}${plugindir}
-    #install -m 0755 ${B}/examples/dbus_inspector/dbus_inspector ${D}${bindir}/dbus_inspector
-    install -m 0755 ${B}/examples/event_broker/event_broker ${D}${bindir}/event_broker
+    install -m 0755 ${B}/examples/dbus_inspector/dbus_inspector ${D}${bindir}/dbus_inspector
+    #install -m 0755 ${B}/examples/event_broker/event_broker ${D}${bindir}/event_broker
     #install -m 0755 ${B}/examples/event_broker/plugins/libevent_broker_plugin.so ${D}${plugindir}/libevent_broker_plugin.so
-    install -m 0755 ${B}/examples/event_broker/publisher/event_publisher ${D}${bindir}/event_publisher
+    #install -m 0755 ${B}/examples/event_broker/publisher/event_publisher ${D}${bindir}/event_publisher
 
     install -d ${D}${sysconfdir}
     install -m 0644 ${S}/examples/dbus_inspector/server-cert.pem ${D}${sysconfdir}/server-cert.pem

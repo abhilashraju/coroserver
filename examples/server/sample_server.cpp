@@ -1,4 +1,5 @@
 
+#include "command_line_parser.hpp"
 #include "http_server.hpp"
 #include "logger.hpp"
 #include "pam_functions.hpp"
@@ -6,13 +7,18 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <string>
-int main()
+int main(int argc, const char* argv[])
 {
     try
     {
+        auto [cert] = getArgs(parseCommandline(argc, argv), "--cert,-c");
+
+        setenv("DBUS_SYSTEM_BUS_ADDRESS",
+               "unix:path=/var/run/dbus/system_bus_socket", 1);
         boost::asio::io_context io_context;
 
         auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
@@ -25,8 +31,14 @@ int main()
         std::shared_ptr<sdbusplus::asio::dbus_interface> iface =
             dbusServer.add_interface(objPath.data(), interface.data());
         // test generic properties
-        iface->register_property(
-            "mfaenbled", true, sdbusplus::asio::PropertyPermission::readWrite);
+
+        iface->register_property_rw<bool>(
+            "mfaenbled", sdbusplus::vtable::property_::emits_change,
+            [](const auto& newPropertyValue, auto& prop) {
+                prop = newPropertyValue;
+                return true;
+            },
+            [](const auto& prop) { return prop; });
 
         iface->register_method("createSecretKey",
                                [](const std::string& userName) {
@@ -43,9 +55,13 @@ int main()
                                 boost::asio::ssl::context::no_sslv2 |
                                 boost::asio::ssl::context::single_dh_use);
         std::cerr << "Cert Loading: \n";
-        ssl_context.use_certificate_chain_file(
-            "/etc/ssl/private/server-cert.pem");
-        ssl_context.use_private_key_file("/etc/ssl/private/server-key.pem",
+        std::string certDir = "/etc/ssl/private";
+        if (cert)
+        {
+            certDir = std::string(*cert);
+        }
+        ssl_context.use_certificate_chain_file(certDir + "/server-cert.pem");
+        ssl_context.use_private_key_file(certDir + "/server-key.pem",
                                          boost::asio::ssl::context::pem);
         std::cerr << "Cert Loaded: \n";
         std::string socket_path = "/tmp/http_server.sock";
