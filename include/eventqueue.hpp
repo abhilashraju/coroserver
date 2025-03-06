@@ -18,8 +18,8 @@ struct EventQueue
             Streamer streamer, const std::string&)>;
     struct DefaultEventProvider
     {
-        net::awaitable<boost::system::error_code>
-            operator()(Streamer streamer, const std::string& event)
+        net::awaitable<boost::system::error_code> operator()(
+            Streamer streamer, const std::string& event)
         {
             LOG_WARNING("Received event in defualt provider: {}", event);
             co_return boost::system::error_code{};
@@ -27,8 +27,8 @@ struct EventQueue
     };
     struct DefaultEventConsumer
     {
-        net::awaitable<boost::system::error_code>
-            operator()(Streamer streamer, const std::string& event)
+        net::awaitable<boost::system::error_code> operator()(
+            Streamer streamer, const std::string& event)
         {
             LOG_WARNING("Received event in defualt Consumer: {}", event);
             // co_await sendHeader(streamer, "ConsumerNotFound");
@@ -113,9 +113,9 @@ struct EventQueue
     {
         events.erase(id);
     }
-    net::awaitable<boost::system::error_code>
-        executeProvider(std::reference_wrapper<EventProvider> provider,
-                        Streamer streamer, const std::string& event)
+    net::awaitable<boost::system::error_code> executeProvider(
+        std::reference_wrapper<EventProvider> provider, Streamer streamer,
+        const std::string& event)
     {
         try
         {
@@ -127,12 +127,28 @@ struct EventQueue
             co_return boost::asio::error::connection_reset;
         }
     }
-
+    net::awaitable<boost::system::error_code> barrierHandler(
+        const std::string& event, Streamer streamer)
+    {
+        auto [id, data] = parseEvent(event);
+        if (data == "Begin")
+        {
+            lastBarrierTime = epocNow();
+        }
+        else
+        {
+            LOG_INFO("Barrier time: {} seconds",
+                     std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::milliseconds(epocNow() - lastBarrierTime))
+                         .count());
+        }
+        co_return boost::system::error_code{};
+    }
     net::awaitable<boost::system::error_code> sendEventHandler(
         uint64_t id, std::reference_wrapper<EventProvider> provider,
         const std::string& event, Streamer streamer)
     {
-        boost::system::error_code retCode{boost::asio::error::connection_reset};
+        boost::system::error_code retCode{};
         auto [ec, size] = co_await streamer.write(net::buffer(event), false);
         if (ec)
         {
@@ -177,10 +193,25 @@ struct EventQueue
             return;
         }
         taskQueue.addTask(std::bind_front(&EventQueue::sendEventHandler, this,
-                                          id, provider, event));
+                                          id, provider, event),
+                          true); // put the task in front
+    }
+    void beginBarrier()
+    {
+        addEvent(makeEvent("Barrier", "Begin", ""));
+    }
+    void endBarrier()
+    {
+        addEvent(makeEvent("Barrier", "End", ""));
     }
     void addEvent(const std::string& event)
     {
+        if (event.find("Barrier") != std::string::npos)
+        {
+            taskQueue.addTask(
+                std::bind_front(&EventQueue::barrierHandler, this, event));
+            return;
+        }
         auto uniqueEventId = epocNow();
         addEvent(event, uniqueEventId);
     }
@@ -194,6 +225,7 @@ struct EventQueue
             it = eventProviders.find("default");
         }
         std::reference_wrapper<EventProvider> provider(it->second);
+
         taskQueue.addTask(std::bind_front(&EventQueue::sendEventHandler, this,
                                           id, provider, event));
     }
@@ -208,9 +240,9 @@ struct EventQueue
         }
         return false;
     }
-    net::awaitable<boost::system::error_code>
-        executeConsumer(std::reference_wrapper<EventConsumer> consumer,
-                        Streamer streamer, const std::string& event)
+    net::awaitable<boost::system::error_code> executeConsumer(
+        std::reference_wrapper<EventConsumer> consumer, Streamer streamer,
+        const std::string& event)
     {
         try
         {
@@ -223,8 +255,8 @@ struct EventQueue
         }
     }
 
-    inline net::awaitable<boost::system::error_code>
-        parseAndHandle(std::string_view header, Streamer streamer)
+    inline net::awaitable<boost::system::error_code> parseAndHandle(
+        std::string_view header, Streamer streamer)
     {
         auto consumerId = getEventId(header);
         auto handler_it = eventConsumers.find(consumerId);
@@ -250,8 +282,8 @@ struct EventQueue
         }
         co_return co_await parseAndHandle(data, streamer);
     }
-    net::awaitable<void>
-        operator()(std::shared_ptr<TcpStreamType::stream_type> socket)
+    net::awaitable<void> operator()(
+        std::shared_ptr<TcpStreamType::stream_type> socket)
     {
         auto streamer = Streamer(socket, std::make_shared<net::steady_timer>(
                                              socket->get_executor()));
@@ -274,4 +306,5 @@ struct EventQueue
     DefaultEventProvider defaultProvider;
     DefaultEventConsumer defaultConsumer;
     JsonSerializer serializer;
+    uint64_t lastBarrierTime{0};
 };

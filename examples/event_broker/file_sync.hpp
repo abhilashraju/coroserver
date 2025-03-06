@@ -70,8 +70,8 @@ struct FileSync
             break;
         }
     }
-    net::awaitable<boost::system::error_code>
-        providerHandler(Streamer streamer, const std::string& eventReplay) const
+    net::awaitable<boost::system::error_code> providerHandler(
+        Streamer streamer, const std::string& eventReplay) const
     {
         if (eventReplay.find("Fetch") != std::string::npos)
         {
@@ -80,8 +80,8 @@ struct FileSync
         }
         co_return boost::system::error_code{};
     }
-    net::awaitable<boost::system::error_code>
-        fileConsumer(Streamer streamer, const std::string& event) const
+    net::awaitable<boost::system::error_code> fileConsumer(
+        Streamer streamer, const std::string& event) const
     {
         if (event.find("FileModified") != std::string::npos)
         {
@@ -95,10 +95,13 @@ struct FileSync
             auto path = event.substr(event.find(':') + 1);
             co_return co_await deleteFile(path);
         }
-        co_return boost::system::error_code{};
+        LOG_ERROR("Unknown event: {}", event);
+        co_return boost::system::error_code{
+            boost::system::errc::operation_not_supported,
+            boost::system::system_category()};
     }
-    net::awaitable<boost::system::error_code>
-        deleteFile(const std::string& path) const
+    net::awaitable<boost::system::error_code> deleteFile(
+        const std::string& path) const
     {
         try
         {

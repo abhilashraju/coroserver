@@ -22,8 +22,7 @@ int main(int argc, const char* argv[])
                 auto [ec, bytes] = co_await streamer.read(net::buffer(data));
                 if (ec)
                 {
-                    std::cerr << "Receive error: " << ec.message() << std::endl;
-
+                    LOG_ERROR("Receive error: {}", ec.message());
                     co_return ec;
                 }
 

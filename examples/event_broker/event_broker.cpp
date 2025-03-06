@@ -32,8 +32,8 @@ void setupSignalHandlers()
     std::signal(SIGINT, signalHandler);
 }
 
-net::awaitable<boost::system::error_code>
-    hiProvider(Streamer streamer, const std::string& eventReplay)
+net::awaitable<boost::system::error_code> hiProvider(
+    Streamer streamer, const std::string& eventReplay)
 {
     LOG_DEBUG("Received event: {}", eventReplay);
     co_await sendHeader(streamer, "I am good");
@@ -63,11 +63,13 @@ net::awaitable<boost::system::error_code> fullSync(
 {
     if (data == "*")
     {
+        peventQueue->beginBarrier();
         LOG_DEBUG("Received Event for FullSync: {}", data);
         for (std::string path : paths["paths"])
         {
             addFiletoUpdateRecursive(path);
         }
+        peventQueue->endBarrier();
         co_return boost::system::error_code{};
     }
     if (fs::exists(data))
@@ -105,6 +107,7 @@ int main(int argc, const char* argv[])
 
         auto dest = json.value("remote", std::string{});
         auto cert = json.value("cert", std::string{});
+        auto privkey = json.value("privkey", std::string{});
         auto rp = json.value("remote-port", std::string{});
         auto port = json.value("port", std::string{});
         auto maxConnections = json.value("max-connections", 1);
@@ -123,11 +126,9 @@ int main(int argc, const char* argv[])
             boost::asio::ssl::context::single_dh_use);
         if (!cert.empty())
         {
-            ssl_server_context.use_certificate_chain_file(
-                cert + std::string("/server-cert.pem"));
+            ssl_server_context.use_certificate_chain_file(cert);
             ssl_server_context.use_private_key_file(
-                cert + std::string("/server-key.pem"),
-                boost::asio::ssl::context::pem);
+                privkey, boost::asio::ssl::context::pem);
         }
         ssl::context ssl_client_context(ssl::context::sslv23_client);
         TcpStreamType acceptor(io_context.get_executor(),

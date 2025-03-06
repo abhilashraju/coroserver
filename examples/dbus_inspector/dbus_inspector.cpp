@@ -9,6 +9,7 @@ int main(int argc, const char* argv[])
 {
     try
     {
+        reactor::getLogger().setLogLevel(reactor::LogLevel::DEBUG);
         auto [cert] = getArgs(parseCommandline(argc, argv), "--cert,-c");
 
         boost::asio::io_context io_context;

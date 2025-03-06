@@ -329,7 +329,14 @@ struct DbusHandlers
             const std::string& property, const nlohmann::json& jValue)>;
     std::map<std::string, PropertySetter> propertySetters = {
         {"b", &DbusHandlers::setProperty<bool>},
+        {"y", &DbusHandlers::setProperty<unsigned char>},
+        {"n", &DbusHandlers::setProperty<int16_t>},
+        {"q", &DbusHandlers::setProperty<uint16_t>},
+        {"x", &DbusHandlers::setProperty<int64_t>},
+        {"t", &DbusHandlers::setProperty<uint64_t>},
         {"i", &DbusHandlers::setProperty<int>},
+        {"u", &DbusHandlers::setProperty<unsigned int>},
+        {"d", &DbusHandlers::setProperty<double>},
         {"s", &DbusHandlers::setProperty<std::string>},
         {"ai", &DbusHandlers::setProperty<std::vector<int>>},
         {"as", &DbusHandlers::setProperty<std::vector<std::string>>},
@@ -397,7 +404,14 @@ struct DbusHandlers
     }
     std::map<std::string, PropertyGetter> propertyGetters = {
         {"b", &DbusHandlers::getProperty<bool>},
+        {"y", &DbusHandlers::getProperty<unsigned char>},
+        {"n", &DbusHandlers::getProperty<int16_t>},
+        {"q", &DbusHandlers::getProperty<uint16_t>},
+        {"x", &DbusHandlers::getProperty<int64_t>},
+        {"t", &DbusHandlers::getProperty<uint64_t>},
         {"i", &DbusHandlers::getProperty<int>},
+        {"u", &DbusHandlers::getProperty<unsigned int>},
+        {"d", &DbusHandlers::getProperty<double>},
         {"s", &DbusHandlers::getProperty<std::string>},
         {"ai", &DbusHandlers::getProperty<std::vector<int>>},
         {"as", &DbusHandlers::getProperty<std::vector<std::string>>}};

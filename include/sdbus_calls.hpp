@@ -42,6 +42,11 @@ inline AwaitableResult<Type> getProperty(
     {
         co_return ReturnTuple<Type>{ec, Type{}};
     }
+    if (!std::holds_alternative<Type>(value))
+    {
+        LOG_ERROR("Error getting property: Type miss match");
+        co_return ReturnTuple<Type>{ec, Type{}};
+    }
     co_return ReturnTuple<Type>{ec, std::get<Type>(value)};
 }
 

@@ -7,6 +7,7 @@
 static constexpr auto DONE = "Done";
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 namespace fs = std::filesystem;
+static constexpr auto timeoutneeded = true;
 inline std::string makeEvent(const std::string& id, const std::string& data,
                              const std::string& delim = "\r\n")
 {
@@ -28,7 +29,7 @@ inline std::pair<std::string, std::string> parseEvent(const std::string& event)
 inline AwaitableResult<size_t> readData(Streamer streamer,
                                         net::mutable_buffer buffer)
 {
-    auto [ec, size] = co_await streamer.read(buffer, false);
+    auto [ec, size] = co_await streamer.read(buffer, timeoutneeded);
     if (ec)
     {
         LOG_DEBUG("Error reading: {}", ec.message());
@@ -39,7 +40,7 @@ inline AwaitableResult<size_t> readData(Streamer streamer,
 inline AwaitableResult<size_t> sendData(Streamer streamer,
                                         net::const_buffer buffer)
 {
-    auto [ec, size] = co_await streamer.write(buffer, false);
+    auto [ec, size] = co_await streamer.write(buffer, timeoutneeded);
     if (ec)
     {
         LOG_ERROR("Error writing: {}", ec.message());
@@ -49,7 +50,7 @@ inline AwaitableResult<size_t> sendData(Streamer streamer,
 }
 inline AwaitableResult<std::string> readHeader(Streamer streamer)
 {
-    auto [ec, data] = co_await streamer.readUntil("\r\n", 1024, false);
+    auto [ec, data] = co_await streamer.readUntil("\r\n", 1024, timeoutneeded);
     if (ec)
     {
         LOG_DEBUG("Error reading: {}", ec.message());
@@ -64,7 +65,8 @@ inline AwaitableResult<size_t> sendHeader(Streamer streamer,
 {
     std::string header = std::format("{}\r\n", data);
     LOG_INFO("Sending Header: {}", header);
-    auto [ec, size] = co_await streamer.write(net::buffer(header), false);
+    auto [ec,
+          size] = co_await streamer.write(net::buffer(header), timeoutneeded);
     if (ec)
     {
         LOG_ERROR("Failed to write to stream: {}", ec.message());
@@ -76,8 +78,8 @@ net::awaitable<boost::system::error_code> sendDone(Streamer streamer)
     auto [ec, size] = co_await sendHeader(streamer, DONE);
     co_return ec;
 }
-net::awaitable<boost::system::error_code>
-    sendFile(Streamer streamer, const std::string& filePath)
+net::awaitable<boost::system::error_code> sendFile(Streamer streamer,
+                                                   const std::string& filePath)
 {
     // std::ifstream file(filePath, std::ios::binary);
     // if (!file.is_open())
@@ -95,7 +97,7 @@ net::awaitable<boost::system::error_code>
         LOG_ERROR("File: {} open failed for read", filePath);
         co_return boost::asio::error::operation_aborted;
     }
-    auto fileSize = lseek(fd, 0, SEEK_END);
+    off_t fileSize = lseek(fd, 0, SEEK_END);
     if (fileSize == -1)
     {
         LOG_ERROR("Failed to get file size: {}", filePath);
@@ -112,10 +114,15 @@ net::awaitable<boost::system::error_code>
         co_return ec;
     }
     std::array<char, 1024> data;
-    while (fileSize > 0)
+    off_t sentSofar = 0;
+    while (sentSofar < fileSize)
     {
         auto [ec, bytes] = co_await reader.read(net::buffer(data));
-        if (ec && ec != boost::asio::error::eof)
+        if (ec == boost::asio::error::eof)
+        {
+            break;
+        }
+        if (ec)
         {
             LOG_ERROR("Failed to read from file: {}", ec.message());
             co_return ec;
@@ -129,13 +136,13 @@ net::awaitable<boost::system::error_code>
             co_return ec;
         }
 
-        fileSize -= bytes;
-        LOG_DEBUG("Remaining: {} to send", fileSize);
+        sentSofar += bytes;
+        LOG_DEBUG("Remaining: {} to send", fileSize - sentSofar);
     }
     co_return boost::system::error_code{};
 }
-net::awaitable<boost::system::error_code>
-    recieveFile(Streamer streamer, const std::string& filePath)
+net::awaitable<boost::system::error_code> recieveFile(
+    Streamer streamer, const std::string& filePath)
 {
     auto [ec, header] = co_await readHeader(streamer);
     if (header.find("FileNotFound") != std::string::npos)
@@ -145,8 +152,8 @@ net::awaitable<boost::system::error_code>
     }
     if (header.find("Content-Size") != std::string::npos)
     {
-        auto size = std::stoull(header.substr(header.find(':') + 1));
-        if (size == 0)
+        std::size_t fileSize = std::stoull(header.substr(header.find(':') + 1));
+        if (fileSize == 0)
         {
             co_return boost::system::error_code{};
         }
@@ -163,8 +170,8 @@ net::awaitable<boost::system::error_code>
         }
         AsyncFileWriter writer(co_await net::this_coro::executor, fd);
         std::array<char, 1024> data;
-
-        while (size > 0)
+        std::size_t recSofar = 0;
+        while (recSofar < fileSize)
         {
             auto [ec, bytes] = co_await readData(streamer, net::buffer(data));
             if (ec)
@@ -179,14 +186,17 @@ net::awaitable<boost::system::error_code>
                 LOG_ERROR("Failed to write to file: {}", ec.message());
                 co_return ec;
             }
-            size -= bytes;
-            LOG_DEBUG("Remaining : {} bytes to recieve", size);
+            recSofar += bytes;
+            LOG_DEBUG("Remaining : {} bytes recieved", fileSize - recSofar);
         }
         co_return boost::system::error_code{};
     }
     else
     {
         LOG_ERROR("Failed to read header: {}", header);
+        co_return boost::system::error_code{
+            boost::system::errc::operation_not_supported,
+            boost::system::system_category()};
     }
     co_return boost::system::error_code{};
 }

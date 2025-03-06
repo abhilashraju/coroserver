@@ -58,10 +58,17 @@ class TaskQueue
         endPoint{url, port}, sslContext(sslContext), ioContext(ioContext),
         maxClients(maxConnections)
     {}
-    void addTask(Task messageHandler)
+    void addTask(Task messageHandler, bool front = false)
     {
         bool empty = taskHandlers.empty();
-        taskHandlers.emplace_back(std::move(messageHandler));
+        if (front)
+        {
+            taskHandlers.emplace_front(std::move(messageHandler));
+        }
+        else
+        {
+            taskHandlers.emplace_back(std::move(messageHandler));
+        }
         if (empty)
         {
             net::co_spawn(ioContext,
@@ -69,6 +76,7 @@ class TaskQueue
                           net::detached);
         }
     }
+
     net::awaitable<void> handleTask(NetworkTask netTask)
     {
         auto steamer = netTask.client.get().acquire().streamer();
