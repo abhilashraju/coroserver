@@ -99,33 +99,24 @@ class TaskQueue
     }
     net::awaitable<void> processTasks()
     {
-        while (true)
+        while (!taskHandlers.empty())
         {
             auto taskEntry = co_await getTask();
-            if (taskEntry)
+            if (!taskEntry)
             {
-                co_spawn(ioContext,
-                         std::bind_front(&TaskQueue::handleTask, this,
-                                         std::move(*taskEntry)),
-                         net::detached);
+                co_return;
             }
+            co_spawn(ioContext,
+                     std::bind_front(&TaskQueue::handleTask, this,
+                                     std::move(*taskEntry)),
+                     net::detached);
         }
 
         co_return;
     }
-    net::awaitable<void> waitForTask()
-    {
-        while (taskHandlers.empty())
-        {
-            co_await net::post(co_await net::this_coro::executor,
-                               net::use_awaitable);
-        }
-        co_return;
-    }
+
     net::awaitable<std::optional<NetworkTask>> getTask()
     {
-        co_await waitForTask();
-
         auto client = co_await getAvailableClient();
 
         if (client)
@@ -143,6 +134,15 @@ class TaskQueue
     }
 
   private:
+    net::awaitable<void> waitFor(std::chrono::seconds seconds)
+    {
+        net::steady_timer timer(ioContext);
+        timer.expires_after(seconds);
+        co_await timer.async_wait(net::use_awaitable);
+        co_await net::post(co_await net::this_coro::executor,
+                           net::use_awaitable);
+        co_return;
+    }
     net::awaitable<std::optional<std::reference_wrapper<Client>>>
         waitForClient()
     {
@@ -156,8 +156,7 @@ class TaskQueue
                     co_return std::ref(*client);
                 }
             }
-            co_await net::post(co_await net::this_coro::executor,
-                               net::use_awaitable);
+            co_await waitFor(1s);
         }
         co_return std::nullopt;
     }
@@ -207,4 +206,5 @@ class TaskQueue
     net::any_io_executor ioContext;
     int maxRetryCount{3};
     size_t maxClients{1};
+    bool started{false};
 };

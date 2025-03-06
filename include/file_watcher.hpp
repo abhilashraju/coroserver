@@ -51,7 +51,10 @@ struct FileWatcher
 
         if (wd < 0)
         {
-            throw std::runtime_error("Failed to add inotify watch");
+            std::string error_message = std::strerror(errno);
+            LOG_ERROR("Failed to add inotify watch for path {}: {}", path,
+                      error_message);
+            return;
         }
         watch_fds[wd] = trimmed(path);
     }

@@ -6,7 +6,7 @@
 #include "utilities.hpp"
 
 #include <map>
-static constexpr auto EVENTQUEFILE = "/var/lib/coroserver/eventqueue.dat";
+static constexpr auto EVENTQUEFILE = "/var/lib/coroserver/eventqueue2.dat";
 namespace fs = std::filesystem;
 struct EventQueue
 {
@@ -94,12 +94,6 @@ struct EventQueue
         serializer.store();
     }
 
-    u_int64_t epocNow()
-    {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::system_clock::now().time_since_epoch())
-            .count();
-    }
     std::string getEventId(std::string_view event)
     {
         if (event.find(':') != std::string::npos)
@@ -148,7 +142,8 @@ struct EventQueue
         uint64_t id, std::reference_wrapper<EventProvider> provider,
         const std::string& event, Streamer streamer)
     {
-        boost::system::error_code retCode{};
+        boost::system::error_code retCode{boost::system::errc::connection_reset,
+                                          boost::system::system_category()};
         auto [ec, size] = co_await streamer.write(net::buffer(event), false);
         if (ec)
         {

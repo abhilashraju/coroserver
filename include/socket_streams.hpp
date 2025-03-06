@@ -5,8 +5,8 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
+#include <boost/asio/streambuf.hpp>
 
-#include <chrono>
 using namespace std::chrono_literals;
 
 struct TcpStreamType
@@ -94,49 +94,60 @@ struct TimedStreamer
         timer->cancel();
         co_return std::make_pair(ec, bytes);
     }
-    // AwaitableResult<std::size_t> readUntil(boost::asio::streambuf streambuf&
-    // buffer,
-    //                                        const std::string& delim)
-    // {
-    //     setTimeout(30s);
-    //     boost::system::error_code ec;
-    //     auto bytes = co_await net::async_read_until(
-    //         *socket, buffer, delim,
-    //         boost::asio::redirect_error(net::use_awaitable, ec));
-    //     co_return std::make_pair(ec, bytes);
-    // }
-    AwaitableResult<std::string> readUntil(
-        const std::string& delim, size_t max_size = 1024, bool timeout = true)
+    AwaitableResult<std::size_t> readUntil(boost::asio::streambuf& buffer,
+                                           const std::string& delim)
     {
-        std::string ret;
-        ret.reserve(max_size);
-        std::string data(1024, '\0');
-        while (ret.length() <= max_size - delim.length())
+        boost::system::error_code ec;
+        auto bytes = co_await net::async_read_until(
+            *socket, buffer, delim,
+            boost::asio::redirect_error(net::use_awaitable, ec));
+        co_return std::make_pair(ec, bytes);
+    }
+    AwaitableResult<std::string> readUntil(const std::string& delim,
+                                           bool timeout = true)
+    {
+        boost::asio::streambuf buffer;
+        if (timeout)
         {
-            if (timeout)
-            {
-                setTimeout(30s);
-            }
-            auto [ec, bytes] = co_await read(net::buffer(data), timeout);
-            timer->cancel();
-            if (ec)
-            {
-                if (ec != boost::asio::error::eof)
-                {
-                    LOG_DEBUG("Error reading: {}", ec.message());
-                }
-                co_return std::make_tuple(ec, std::move(ret));
-            }
-            ret.append(data.data(), bytes);
-            if (std::string_view{data.data(), bytes}.find(delim) !=
-                std::string::npos)
-            {
-                co_return std::make_tuple(boost::system::error_code{},
-                                          std::move(ret));
-            }
-            std::fill(data.begin(), data.end(), '\0');
+            setTimeout(30s);
         }
-        co_return std::make_tuple(boost::system::error_code{}, std::move(ret));
+        auto [ec, size] = co_await readUntil(buffer, delim);
+        timer->cancel();
+        if (ec)
+        {
+            co_return std::make_pair(ec, std::string{});
+        }
+        std::string ret;
+        auto data = buffer.data();
+        ret.append(boost::asio::buffers_begin(data),
+                   boost::asio::buffers_begin(data) + size);
+        co_return std::make_pair(ec, std::move(ret));
+
+        // std::string ret;
+        // ret.reserve(max_size);
+        // std::array<char, 1024> data{0};
+        // while (ret.length() <= max_size - delim.length())
+        // {
+        //     auto [ec, bytes] = co_await read(net::buffer(data), timeout);
+        //     if (ec)
+        //     {
+        //         if (ec != boost::asio::error::eof)
+        //         {
+        //             LOG_DEBUG("Error reading: {}", ec.message());
+        //         }
+        //         co_return std::make_tuple(ec, std::move(ret));
+        //     }
+        //     ret.append(data.data(), bytes);
+        //     if (std::string_view{data.data(), bytes}.find(delim) !=
+        //         std::string::npos)
+        //     {
+        //         co_return std::make_tuple(boost::system::error_code{},
+        //                                   std::move(ret));
+        //     }
+        //     std::fill(data.begin(), data.end(), 0);
+        // }
+        // co_return std::make_tuple(boost::system::error_code{},
+        // std::move(ret));
     }
 
     AwaitableResult<std::size_t> write(net::const_buffer data,

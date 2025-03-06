@@ -96,13 +96,12 @@ class JsonSerializer
             LOG_INFO("Storing data {} to  {}", jsonData.dump(4), serPath);
             file << jsonData.dump(4); // Pretty print with 4 spaces
             file.close();
+            std::error_code ec;
             return true;
         }
-        else
-        {
-            LOG_ERROR("Unable to open file for writing {}", serPath);
-            return false;
-        }
+
+        LOG_ERROR("Unable to open file for writing {}", serPath);
+        return false;
     }
     void load()
     {

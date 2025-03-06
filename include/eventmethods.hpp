@@ -5,17 +5,42 @@
 #include <filesystem>
 #include <fstream>
 static constexpr auto DONE = "Done";
+static constexpr auto HEDER_DELIM = "\r\n\r\n";
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 namespace fs = std::filesystem;
 static constexpr auto timeoutneeded = true;
+inline u_int64_t epocNow()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+inline std::string currentTime()
+{
+    auto now = std::chrono::system_clock::now();
+    auto now_time_t = std::chrono::system_clock::to_time_t(now);
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      now.time_since_epoch()) %
+                  1000;
+    auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                      now.time_since_epoch()) %
+                  1000;
+
+    std::tm tm = *std::localtime(&now_time_t);
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%H:%M:%S") << '.' << std::setw(3)
+        << std::setfill('0') << now_ms.count() << '.' << std::setw(3)
+        << std::setfill('0') << now_us.count();
+    return oss.str();
+}
 inline std::string makeEvent(const std::string& id, const std::string& data,
-                             const std::string& delim = "\r\n")
+                             const std::string& delim = HEDER_DELIM)
 {
     return std::format("{}:{}{}", id, data, delim);
 }
 inline std::string makeEvent(const std::string& data)
 {
-    return std::format("{}\r\n", data);
+    return std::format("{}{}", data, HEDER_DELIM);
 }
 inline std::pair<std::string, std::string> parseEvent(const std::string& event)
 {
@@ -50,21 +75,22 @@ inline AwaitableResult<size_t> sendData(Streamer streamer,
 }
 inline AwaitableResult<std::string> readHeader(Streamer streamer)
 {
-    auto [ec, data] = co_await streamer.readUntil("\r\n", 1024, timeoutneeded);
+    auto [ec, data] = co_await streamer.readUntil(HEDER_DELIM, timeoutneeded);
     if (ec)
     {
         LOG_DEBUG("Error reading: {}", ec.message());
         co_return std::make_pair(ec, data);
     }
-    data.erase(data.length() - 2, 2);
-    LOG_INFO("Recieved Header: {}", data);
+    auto delimLength = std::string_view(HEDER_DELIM).length();
+    data.erase(data.length() - delimLength, delimLength);
+    LOG_INFO("{} Recieved Header: {}", currentTime(), data);
     co_return std::make_pair(ec, data);
 }
 inline AwaitableResult<size_t> sendHeader(Streamer streamer,
                                           const std::string& data)
 {
-    std::string header = std::format("{}\r\n", data);
-    LOG_INFO("Sending Header: {}", header);
+    std::string header = std::format("{}{}", data, HEDER_DELIM);
+    LOG_INFO("{} Sending Header: {}", currentTime(), header);
     auto [ec,
           size] = co_await streamer.write(net::buffer(header), timeoutneeded);
     if (ec)
@@ -141,15 +167,37 @@ net::awaitable<boost::system::error_code> sendFile(Streamer streamer,
     }
     co_return boost::system::error_code{};
 }
+AwaitableResult<std::string> readFor(Streamer streamer, const auto& headers,
+                                     int retryCount = 3)
+{
+    std::string header;
+    boost::system::error_code ec;
+    do
+    {
+        std::tie(ec, header) = co_await readHeader(streamer);
+        auto iter = std::ranges::find_if(headers, [&header](const auto& h) {
+            return header.find(h) != std::string::npos;
+        });
+        if (iter != headers.end())
+        {
+            co_return std::make_pair(boost::system::error_code{}, header);
+        }
+    } while (!ec && --retryCount > 0);
+    co_return std::make_pair(ec, "");
+}
 net::awaitable<boost::system::error_code> recieveFile(
     Streamer streamer, const std::string& filePath)
 {
-    auto [ec, header] = co_await readHeader(streamer);
-    if (header.find("FileNotFound") != std::string::npos)
-    {
-        LOG_ERROR("File not found: {}", filePath);
-        co_return boost::system::error_code{};
-    }
+    auto [ec, header] = co_await readFor(
+        streamer,
+        std::vector{"FileNotFound", "Content-Size"}); // to fix read until error
+    if (ec)
+
+        if (header.find("FileNotFound") != std::string::npos)
+        {
+            LOG_ERROR("File not found: {}", filePath);
+            co_return boost::system::error_code{};
+        }
     if (header.find("Content-Size") != std::string::npos)
     {
         std::size_t fileSize = std::stoull(header.substr(header.find(':') + 1));
