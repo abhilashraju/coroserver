@@ -78,7 +78,7 @@ inline AwaitableResult<std::string> readHeader(Streamer streamer)
     auto [ec, data] = co_await streamer.readUntil(HEDER_DELIM, timeoutneeded);
     if (ec)
     {
-        LOG_DEBUG("Error reading: {}", ec.message());
+        LOG_INFO("Error reading: {}", ec.message());
         co_return std::make_pair(ec, data);
     }
     auto delimLength = std::string_view(HEDER_DELIM).length();

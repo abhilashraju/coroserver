@@ -7,6 +7,7 @@
 
 #include <map>
 static constexpr auto EVENTQUEFILE = "/var/lib/coroserver/eventqueue2.dat";
+static constexpr auto TIMETOLIVE = 60;
 namespace fs = std::filesystem;
 struct EventQueue
 {
@@ -142,8 +143,7 @@ struct EventQueue
         uint64_t id, std::reference_wrapper<EventProvider> provider,
         const std::string& event, Streamer streamer)
     {
-        boost::system::error_code retCode{boost::system::errc::connection_reset,
-                                          boost::system::system_category()};
+        boost::system::error_code retCode{};
         auto [ec, size] = co_await streamer.write(net::buffer(event), false);
         if (ec)
         {
@@ -181,7 +181,10 @@ struct EventQueue
     {
         const auto& event = events[id];
         auto now = epocNow();
-        if (now - id > 30000)
+        auto time_diff = std::chrono::duration_cast<std::chrono::seconds>(
+                             std::chrono::milliseconds(now - id))
+                             .count();
+        if (time_diff > TIMETOLIVE)
         {
             LOG_ERROR("Exceeded time to live for the event: {}", event);
             removeEvent(id);

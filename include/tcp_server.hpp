@@ -41,8 +41,8 @@ class TcpServer
         });
     }
     template <typename Socket>
-    boost::asio::awaitable<void>
-        handle_client(std::shared_ptr<boost::asio::ssl::stream<Socket>> socket)
+    boost::asio::awaitable<void> handle_client(
+        std::shared_ptr<boost::asio::ssl::stream<Socket>> socket)
     {
         // Perform SSL handshake
         co_await socket->async_handshake(boost::asio::ssl::stream_base::server,
@@ -57,6 +57,7 @@ class TcpServer
             co_await router(Streamer(socket, timer));
             timer->cancel(); // cancel any pending timer
         }
+        co_await socket->async_shutdown(boost::asio::use_awaitable);
     }
 
     net::any_io_executor context;

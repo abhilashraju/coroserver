@@ -35,6 +35,10 @@ class TaskQueue
         {
             available = true;
         }
+        bool isOpen() const
+        {
+            return client.isOpen();
+        }
     };
     struct EndPoint
     {
@@ -60,7 +64,7 @@ class TaskQueue
     {}
     void addTask(Task messageHandler, bool front = false)
     {
-        bool empty = taskHandlers.empty();
+        bool processNow = taskHandlers.size() < maxClients;
         if (front)
         {
             taskHandlers.emplace_front(std::move(messageHandler));
@@ -69,7 +73,7 @@ class TaskQueue
         {
             taskHandlers.emplace_back(std::move(messageHandler));
         }
-        if (empty)
+        if (processNow)
         {
             net::co_spawn(ioContext,
                           std::bind_front(&TaskQueue::processTasks, this),
@@ -84,10 +88,25 @@ class TaskQueue
         if (!ec)
         {
             netTask.client.get().release();
+            // if more tasks are available, we can continue
+            if (!taskHandlers.empty())
+            {
+                co_spawn(
+                    ioContext,
+                    std::bind_front(&TaskQueue::handleTask, this,
+                                    NetworkTask{takeTask(), netTask.client}),
+                    net::detached);
+            }
             co_return;
         }
+        // the connection is closed, we need to
+        // remove the client from the list
         removeClient(netTask.client);
-        // the connection is closed, we need to remove the client
+        // start new task if available with new client
+        net::co_spawn(ioContext,
+                      std::bind_front(&TaskQueue::processTasks, this),
+                      net::detached);
+        co_return;
     }
     void removeClient(std::reference_wrapper<Client> client)
     {
@@ -96,14 +115,24 @@ class TaskQueue
                                          return c.get() == &client.get();
                                      }),
                       clients.end());
+        // remove all closed clients
+        clients.erase(std::remove_if(clients.begin(), clients.end(),
+                                     [](auto& c) { return !c->isOpen(); }),
+                      clients.end());
     }
     net::awaitable<void> processTasks()
     {
-        while (!taskHandlers.empty())
+        if (!taskHandlers.empty())
         {
             auto taskEntry = co_await getTask();
             if (!taskEntry)
             {
+                // if connection is not available, retry for tasks if any
+                // after 5 seconds
+                co_await waitFor(5s);
+                net::co_spawn(ioContext,
+                              std::bind_front(&TaskQueue::processTasks, this),
+                              net::detached);
                 co_return;
             }
             co_spawn(ioContext,
@@ -114,11 +143,15 @@ class TaskQueue
 
         co_return;
     }
-
+    Task takeTask()
+    {
+        auto message = std::move(taskHandlers.front());
+        taskHandlers.pop_front();
+        return message;
+    }
     net::awaitable<std::optional<NetworkTask>> getTask()
     {
         auto client = co_await getAvailableClient();
-
         if (client)
         {
             if (taskHandlers.empty())
@@ -126,9 +159,7 @@ class TaskQueue
                 client.value().get().release();
                 co_return std::nullopt;
             }
-            auto message = std::move(taskHandlers.front());
-            taskHandlers.pop_front();
-            co_return NetworkTask{message, *client};
+            co_return NetworkTask{takeTask(), *client};
         }
         co_return std::nullopt;
     }
@@ -143,38 +174,36 @@ class TaskQueue
                            net::use_awaitable);
         co_return;
     }
-    net::awaitable<std::optional<std::reference_wrapper<Client>>>
-        waitForClient()
+    std::optional<std::reference_wrapper<Client>> getFreeClient()
     {
-        while (clients.size() >= maxClients)
+        for (auto& client : clients)
         {
-            for (auto& client : clients)
+            if (client->isAvailable())
             {
-                if (client->isAvailable())
-                {
-                    client->acquire();
-                    co_return std::ref(*client);
-                }
+                client->acquire();
+                return std::ref(*client);
             }
-            co_await waitFor(1s);
         }
-        co_return std::nullopt;
+        return std::nullopt;
     }
     net::awaitable<std::optional<std::reference_wrapper<Client>>>
         getAvailableClient()
     {
-        auto freeclient = co_await waitForClient();
+        auto freeclient = getFreeClient();
         if (freeclient)
         {
             co_return freeclient;
         }
-        auto client = std::make_unique<Client>(ioContext, sslContext);
-        auto ec = co_await tryConnect(client->acquire());
-        if (!ec)
+        if (clients.size() < maxClients)
         {
-            auto clientToRet = std::ref(*client);
-            clients.emplace_back(std::move(client));
-            co_return clientToRet;
+            auto client = std::make_unique<Client>(ioContext, sslContext);
+            auto ec = co_await tryConnect(client->acquire());
+            if (!ec)
+            {
+                auto clientToRet = std::ref(*client);
+                clients.emplace_back(std::move(client));
+                co_return clientToRet;
+            }
         }
         co_return std::nullopt;
     }
