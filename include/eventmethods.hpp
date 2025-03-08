@@ -6,6 +6,7 @@
 #include <fstream>
 static constexpr auto DONE = "Done";
 static constexpr auto HEDER_DELIM = "\r\n\r\n";
+static constexpr auto BUFFER_SIZE = 8192;
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 namespace fs = std::filesystem;
 static constexpr auto timeoutneeded = true;
@@ -139,11 +140,12 @@ net::awaitable<boost::system::error_code> sendFile(Streamer streamer,
         LOG_ERROR("Failed to write to stream: {}", ec.message());
         co_return ec;
     }
-    std::array<char, 1024> data;
+    std::vector<char> data((fileSize < BUFFER_SIZE) ? fileSize : BUFFER_SIZE);
     off_t sentSofar = 0;
     while (sentSofar < fileSize)
     {
-        auto [ec, bytes] = co_await reader.read(net::buffer(data));
+        auto [ec, bytes] =
+            co_await reader.read(net::buffer(data.data(), data.size()));
         if (ec == boost::asio::error::eof)
         {
             break;
@@ -217,11 +219,13 @@ net::awaitable<boost::system::error_code> recieveFile(
             co_return boost::asio::error::operation_aborted;
         }
         AsyncFileWriter writer(co_await net::this_coro::executor, fd);
-        std::array<char, 1024> data;
+        std::vector<char> data(
+            (fileSize < BUFFER_SIZE) ? fileSize : BUFFER_SIZE);
         std::size_t recSofar = 0;
         while (recSofar < fileSize)
         {
-            auto [ec, bytes] = co_await readData(streamer, net::buffer(data));
+            auto [ec, bytes] = co_await readData(
+                streamer, net::buffer(data.data(), data.size()));
             if (ec)
             {
                 LOG_ERROR("Failed to read from stream: {}", ec.message());

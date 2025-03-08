@@ -61,21 +61,22 @@ void addFiletoUpdateRecursive(const std::string& path)
 net::awaitable<boost::system::error_code> fullSync(
     const nlohmann::json& paths, Streamer streamer, const std::string& data)
 {
+    peventQueue->beginBarrier();
     if (data == "*")
     {
-        peventQueue->beginBarrier();
         LOG_DEBUG("Received Event for FullSync: {}", data);
         for (std::string path : paths["paths"])
         {
             addFiletoUpdateRecursive(path);
         }
-        peventQueue->endBarrier();
+
         co_return boost::system::error_code{};
     }
     if (fs::exists(data))
     {
         addFiletoUpdateRecursive(data);
     }
+    peventQueue->endBarrier();
 }
 net::awaitable<boost::system::error_code> publisher(
     const nlohmann::json& paths, Streamer streamer, const std::string& event)
