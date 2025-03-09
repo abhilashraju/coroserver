@@ -10,7 +10,7 @@ static constexpr auto HEDER_DELIM = "\r\n\r\n";
 static constexpr auto BUFFER_SIZE = 8192;
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 namespace fs = std::filesystem;
-static constexpr auto timeoutneeded = true;
+static constexpr auto timeoutneeded = false;
 inline u_int64_t epocNow()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -105,6 +105,19 @@ net::awaitable<boost::system::error_code> sendDone(Streamer streamer)
 {
     auto [ec, size] = co_await sendHeader(streamer, DONE);
     co_return ec;
+}
+AwaitableResult<std::string> readDone(Streamer streamer)
+{
+    auto [ec, data] = co_await streamer.readUntil(HEDER_DELIM, true);
+    if (ec)
+    {
+        LOG_INFO("Error reading Done: {}", ec.message());
+        co_return std::make_pair(ec, data);
+    }
+    auto delimLength = std::string_view(HEDER_DELIM).length();
+    data.erase(data.length() - delimLength, delimLength);
+    LOG_INFO("{} Recieved Header: {}", currentTime(), data);
+    co_return std::make_pair(ec, data);
 }
 net::awaitable<boost::system::error_code> sendFile(Streamer streamer,
                                                    const std::string& filePath)

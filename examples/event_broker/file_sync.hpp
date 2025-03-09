@@ -16,6 +16,12 @@ struct FileSync
                 co_return co_await providerHandler(streamer, eventReplay);
             });
         eventQueue.addEventProvider(
+            "ArchiveModified",
+            [this](Streamer streamer, const std::string& eventReplay)
+                -> net::awaitable<boost::system::error_code> {
+                co_return co_await providerHandler(streamer, eventReplay);
+            });
+        eventQueue.addEventProvider(
             "FileDeleted",
             [this](Streamer streamer, const std::string& eventReplay)
                 -> net::awaitable<boost::system::error_code> {
@@ -23,6 +29,12 @@ struct FileSync
             });
         eventQueue.addEventConsumer(
             "FileModified",
+            [this](Streamer streamer, const std::string& event)
+                -> net::awaitable<boost::system::error_code> {
+                co_return co_await fileConsumer(streamer, event);
+            });
+        eventQueue.addEventConsumer(
+            "ArchiveModified",
             [this](Streamer streamer, const std::string& event)
                 -> net::awaitable<boost::system::error_code> {
                 co_return co_await fileConsumer(streamer, event);
@@ -69,29 +81,53 @@ struct FileSync
         }
     }
     net::awaitable<boost::system::error_code> providerHandler(
-        Streamer streamer, const std::string& eventReplay) const
+        Streamer streamer, const std::string& event) const
     {
-        if (eventReplay.find("Fetch") != std::string::npos)
+        auto [id, path] = parseEvent(event);
+        if (id == "Fetch")
         {
-            auto path = eventReplay.substr(eventReplay.find(':') + 1);
             co_return co_await sendFile(streamer, path);
+        }
+        if (id == "FetchArchive")
+        {
+            std::string archpath = "/tmp/.archive/";
+            if (!fs::exists(archpath))
+            {
+                fs::create_directories(archpath);
+            }
+            replaced(path, '/', '_', std::back_inserter(archpath));
+            archpath += ".tar.gz";
+
+            if (createTarArchive(path, archpath))
+            {
+                co_await sendHeader(
+                    streamer, makeEvent("FileType", "archive:" + archpath));
+                auto ec = co_await sendFile(streamer, archpath);
+                std::filesystem::remove(archpath);
+                co_return ec;
+            }
+            co_await sendHeader(streamer, makeEvent("FileNotFound", path));
+            co_return boost::system::error_code{};
         }
         co_return boost::system::error_code{};
     }
     net::awaitable<boost::system::error_code> fileConsumer(
         Streamer streamer, const std::string& event) const
     {
-        if (event.find("FileModified") != std::string::npos)
+        auto [id, data] = parseEvent(event);
+        if (id == "FileModified")
         {
-            auto path = event.substr(event.find(':') + 1);
-            co_await sendHeader(streamer, std::format("Fetch:{}", path));
-
-            co_return co_await recieveFile(streamer, root + path);
+            co_await sendHeader(streamer, std::format("Fetch:{}", data));
+            co_return co_await recieveFile(streamer, root, data);
         }
-        if (event.find("FileDeleted") != std::string::npos)
+        if (id == "FileDeleted")
         {
-            auto path = event.substr(event.find(':') + 1);
-            co_return co_await deleteFile(path);
+            co_return co_await deleteFile(data);
+        }
+        if (id == "ArchiveModified")
+        {
+            co_await sendHeader(streamer, std::format("FetchArchive:{}", data));
+            co_return co_await recieveFile(streamer, root, data);
         }
         LOG_ERROR("Unknown event: {}", event);
         co_return boost::system::error_code{

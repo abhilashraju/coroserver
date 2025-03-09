@@ -173,6 +173,7 @@ struct EventQueue
             co_return ec;
         }
         removeEvent(id);
+        co_await readDone(streamer);
         co_return retCode;
         // co_return ec;
     }
