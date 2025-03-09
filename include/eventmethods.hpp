@@ -1,4 +1,5 @@
 #pragma once
+#include "archive.hpp"
 #include "file_io.hpp"
 #include "tcp_server.hpp"
 
@@ -108,16 +109,6 @@ net::awaitable<boost::system::error_code> sendDone(Streamer streamer)
 net::awaitable<boost::system::error_code> sendFile(Streamer streamer,
                                                    const std::string& filePath)
 {
-    // std::ifstream file(filePath, std::ios::binary);
-    // if (!file.is_open())
-    // {
-    //     LOG_ERROR("File not found: {}", filePath);
-    //     auto [ec, size] = co_await sendHeader(streamer, "FileNotFound:");
-    //     co_return ec ? ec : boost::system::error_code{};
-    // }
-    // file.seekg(0, std::ios::end);
-    // auto fileSize = static_cast<std::size_t>(file.tellg());
-    // file.seekg(0, std::ios::beg);
     int fd = ::open(filePath.c_str(), O_RDONLY);
     if (fd == -1)
     {
@@ -188,19 +179,59 @@ AwaitableResult<std::string> readFor(Streamer streamer, const auto& headers,
     co_return std::make_pair(ec, "");
 }
 net::awaitable<boost::system::error_code> recieveFile(
-    Streamer streamer, const std::string& filePath)
+    Streamer streamer, const std::string& root, const std::string& destPath);
+net::awaitable<boost::system::error_code> recieveArchiveFile(
+    Streamer streamer, const std::string& root, const std::string& destPath,
+    const std::string& archPath)
 {
-    auto [ec, header] = co_await readFor(
-        streamer,
-        std::vector{"FileNotFound", "Content-Size"}); // to fix read until error
+    auto ec = co_await recieveFile(streamer, root, archPath);
     if (ec)
+    {
+        co_return ec;
+    }
+    if (!fs::exists(root + destPath))
+    {
+        fs::create_directories(root + destPath);
+    }
+    if (extractTarArchive(root + archPath, root + destPath))
+    {
+        LOG_INFO("Extracted tar file: {}", root + archPath);
+        std::filesystem::remove(root + archPath);
+        co_return boost::system::error_code{};
+    }
 
-        if (header.find("FileNotFound") != std::string::npos)
+    LOG_ERROR("Failed to extract tar file: {}", root + archPath);
+    co_return boost::system::error_code{boost::system::errc::io_error,
+                                        boost::system::system_category()};
+}
+net::awaitable<boost::system::error_code> recieveFile(
+    Streamer streamer, const std::string& root, const std::string& destPath)
+{
+    std::string filePath = root + destPath;
+    auto [ec, header] = co_await readFor(
+        streamer, std::vector{"FileNotFound", "Content-Size",
+                              "FileType"}); // to fix read until error
+    if (ec)
+    {
+        co_return ec;
+    }
+    auto [id, data] = parseEvent(header);
+    if (id == "FileType")
+    {
+        auto [ftype, archfilePath] = parseEvent(data);
+        if (ftype == "archive")
         {
-            LOG_ERROR("File not found: {}", filePath);
-            co_return boost::system::error_code{};
+            co_return co_await recieveArchiveFile(streamer, root, destPath,
+                                                  archfilePath);
         }
-    if (header.find("Content-Size") != std::string::npos)
+        co_return co_await recieveFile(streamer, filePath, ftype);
+    }
+    if (id == "FileNotFound")
+    {
+        LOG_ERROR("File not found: {}", filePath);
+        co_return boost::system::error_code{};
+    }
+    if (id == "Content-Size")
     {
         std::size_t fileSize = std::stoull(header.substr(header.find(':') + 1));
         if (fileSize == 0)

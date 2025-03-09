@@ -5,7 +5,7 @@ project('reactor', 'cpp', version: '1.0.0', default_options: ['cpp_std=c++23','c
 boost_dep = dependency('boost', modules: ['url'], required: true)
 
 openssl_dep = dependency('openssl', required: true)
-
+zlib_dep = dependency('zlib')
 
 nlohmann_json_dep = dependency(
     'nlohmann_json',
@@ -33,7 +33,7 @@ endif
 
 reactor_dep = declare_dependency(
     include_directories:['include'],
-    dependencies:[nlohmann_json_dep,openssl_dep,boost_dep]
+    dependencies:[nlohmann_json_dep,openssl_dep,boost_dep,zlib_dep]
 )
 cxx = meson.get_compiler('cpp')
 # Add dependencies

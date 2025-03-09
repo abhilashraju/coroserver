@@ -1,6 +1,5 @@
 #pragma once
 #include "dbus_types.hpp"
-#include "eventmethods.hpp"
 #include "http_server.hpp"
 #include "logger.hpp"
 struct DbusHandlers
@@ -58,10 +57,7 @@ struct DbusHandlers
                 [&property](const auto& p) { return p.first == property; });
         for (const auto& [prop, value] : changedProperties)
         {
-            auto event = makeEvent("PropertyChanged",
-                                   path + ":" + interfaceName + ":" + prop +
-                                       ":" + std::get<std::string>(value));
-            LOG_INFO("Event: {}", event);
+            LOG_INFO("Event: {}", prop);
         }
     }
     net::awaitable<Response> subscribe(Request& req,

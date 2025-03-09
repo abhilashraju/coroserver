@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <ranges>
 #include <string>
 #include <vector>
@@ -28,6 +29,11 @@ inline auto join(const auto& input, char c)
         result += c + toString(v);
     }
     return result;
+}
+inline void replaced(const std::string& input, char c, char r, auto outiter)
+{
+    std::transform(begin(input), end(input), outiter,
+                   [c, r](char ch) { return ch == c ? r : ch; });
 }
 
 } // namespace

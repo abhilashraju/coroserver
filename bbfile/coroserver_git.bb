@@ -10,6 +10,7 @@ DEPENDS = " \
     libpam \
     nlohmann-json \
     openssl \
+    libarchive \
     sdbusplus \
 "
 

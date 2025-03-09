@@ -1,5 +1,6 @@
 
 
+#include "archive.hpp"
 #include "command_line_parser.hpp"
 #include "dbus_sync.hpp"
 #include "eventmethods.hpp"
@@ -47,11 +48,7 @@ void addFiletoUpdateRecursive(const std::string& path)
     }
     if (std::filesystem::is_directory(path))
     {
-        for (const auto& entry :
-             std::filesystem::recursive_directory_iterator(path))
-        {
-            addFiletoUpdateRecursive(entry.path().string());
-        }
+        peventQueue->addEvent(makeEvent("ArchiveModified", path));
     }
     else
     {
