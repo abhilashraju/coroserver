@@ -1,0 +1,9 @@
+[Unit]
+Description=Journal server
+
+[Service]
+ExecStart=/usr/bin/journalserver
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
