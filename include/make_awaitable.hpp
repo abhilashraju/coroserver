@@ -19,8 +19,8 @@ using AwaitableResult = net::awaitable<ReturnTuple<Types...>>;
 template <typename Handler, typename... Types>
 struct PromiseType
 {
-    Handler promise;
-    void setValues(Types... values)
+    mutable Handler promise;
+    void setValues(Types... values) const
     {
         promise(ReturnTuple<Types...>{std::move(values)...});
     }

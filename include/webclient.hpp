@@ -42,6 +42,7 @@ struct WebClient
         std::map<std::string, std::string> params;
         int version{11};
         std::map<std::string, std::string> headers;
+        bool keepAlive{true};
     } request;
     std::function<AwaitableResult<boost::system::error_code>(Response)>
         thenHandler;
@@ -86,6 +87,12 @@ struct WebClient
         std::get<TcpData>(data).host = h;
         return *this;
     }
+    WebClient& witKeepAlive(bool keepAlive)
+    {
+        request.keepAlive = keepAlive;
+        return *this;
+    }
+
     WebClient& withPort(const std::string& p)
     {
         static_assert(std::is_same_v<Stream, beast::tcp_stream>);
@@ -187,6 +194,7 @@ struct WebClient
             }
             if (!ec)
             {
+                isConnected = true;
                 co_return ec;
             }
         }
@@ -206,8 +214,8 @@ struct WebClient
         }
     }
     template <typename... Ret>
-    AwaitableResult<Ret...>
-        returnSuccess(boost::system::error_code ec, Response response)
+    AwaitableResult<Ret...> returnSuccess(boost::system::error_code ec,
+                                          Response response)
     {
         constexpr int size = sizeof...(Ret);
         if constexpr (size > 1)
@@ -238,6 +246,7 @@ struct WebClient
             params = "?" + params;
         }
         Request req(request.method, request.target + params, request.version);
+        req.keep_alive(request.keepAlive);
         if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
         {
             req.set(http::field::host, std::get<TcpData>(data).host);

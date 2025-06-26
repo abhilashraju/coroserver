@@ -12,8 +12,8 @@ class HttpClient
     HttpClient(const HttpClient&) = delete;
     HttpClient& operator=(const HttpClient&) = delete;
 
-    net::awaitable<boost::system::error_code>
-        connect(const std::string& host, const std::string& port)
+    net::awaitable<boost::system::error_code> connect(const std::string& host,
+                                                      const std::string& port)
     {
         boost::system::error_code ec;
         if constexpr (std::is_same_v<Stream, beast::tcp_stream>)

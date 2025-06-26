@@ -1,0 +1,10 @@
+[Unit]
+Description=event broker
+
+[Service]
+ExecStart=/usr/bin/event_broker
+Restart=always
+Type=dbus
+
+[Install]
+WantedBy=multi-user.target

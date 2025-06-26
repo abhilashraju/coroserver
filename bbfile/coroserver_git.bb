@@ -41,10 +41,13 @@ do_install() {
     install -m 0755 ${B}/examples/event_broker/event_broker ${D}${bindir}/event_broker
     #install -m 0755 ${B}/examples/event_broker/plugins/libevent_broker_plugin.so ${D}${plugindir}/libevent_broker_plugin.so
     install -m 0755 ${B}/examples/event_broker/publisher/event_publisher ${D}${bindir}/event_publisher
+    install -m 0755 ${B}/examples/journalserver/journalserver ${D}${bindir}/journalserver
+    install -m 0755 ${B}/examples/spdmlite/spdmlite ${D}${bindir}/spdmlite
 
     install -d ${D}${sysconfdir}
-    install -m 0644 ${S}/examples/dbus_inspector/server-cert.pem ${D}${sysconfdir}/server-cert.pem
-    install -m 0644 ${S}/examples/dbus_inspector/server-key.pem ${D}${sysconfdir}/server-key.pem
+    install -m 0644 ${S}/examples/spdmlite/server-cert.pem ${D}${sysconfdir}/server-cert.pem
+    install -m 0644 ${S}/examples/spdmlite/server-key.pem ${D}${sysconfdir}/server-key.pem
+    install -m 0644 ${S}/examples/spdmlite/public.pem ${D}${sysconfdir}/public.pem
 }
 
 # Specify the package information

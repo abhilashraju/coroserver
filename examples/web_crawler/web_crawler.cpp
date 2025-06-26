@@ -117,6 +117,7 @@ auto getLinksParallel(const std::string& uri, net::io_context& ioc,
     }
     client.withUrl(uri_view.value());
     auto [ec, response] = co_await client.execute<Response>();
+    // LOG_INFO("Response: {}", response.body());
     if (!ec)
     {
         for (const auto& link : extract_links(response.body()))
@@ -163,6 +164,7 @@ int main(int argc, const char* argv[])
 {
     try
     {
+        reactor::getLogger().setLogLevel(reactor::LogLevel::DEBUG);
         auto [url] = getArgs(parseCommandline(argc, argv), "--url,-u");
         if (!url)
         {

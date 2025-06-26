@@ -1,5 +1,6 @@
 #pragma once
 #include "eventmethods.hpp"
+#include "event_file_methods.hpp"
 #include "eventqueue.hpp"
 #include "file_watcher.hpp"
 #include "logger.hpp"
@@ -45,8 +46,8 @@ struct FileSync
                 -> net::awaitable<boost::system::error_code> {
                 co_return co_await fileConsumer(streamer, event);
             });
-        // boost::asio::co_spawn(io_context, watchFileChanges(watcher, *this),
-        //                       boost::asio::detached);
+        boost::asio::co_spawn(io_context, watchFileChanges(watcher, *this),
+                              boost::asio::detached);
         root = json.value("root", std::string{});
         for (std::string path : json["paths"])
         {
