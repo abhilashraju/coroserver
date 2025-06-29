@@ -1,5 +1,6 @@
 
 
+#include "certificate_exchange.hpp"
 #include "command_line_parser.hpp"
 #include "eventmethods.hpp"
 #include "eventqueue.hpp"
@@ -15,10 +16,10 @@ void signalHandler(int signal)
     if (signal == SIGTERM || signal == SIGINT)
     {
         LOG_INFO("Termination signal received, storing event queue...");
-        if (peventQueue)
-        {
-            peventQueue->store();
-        }
+        // if (peventQueue)
+        // {
+        //     peventQueue->store();
+        // }
         exit(0);
     }
 }
@@ -27,6 +28,26 @@ void setupSignalHandlers()
 {
     std::signal(SIGTERM, signalHandler);
     std::signal(SIGINT, signalHandler);
+}
+bool checkMeasurementResult(const MeasurementHandler::MeasurementResult& result)
+{
+    std::vector<std::string> failedExecutables =
+        std::ranges::views::filter(
+            result, [](const auto& pair) { return !pair.second; }) |
+        std::ranges::views::keys | std::ranges::to<std::vector<std::string>>();
+    if (failedExecutables.empty())
+    {
+        LOG_INFO("All measurements passed successfully.");
+        return true;
+    }
+
+    LOG_ERROR("Failed measurements for executables:");
+    for (const auto& exe : failedExecutables)
+    {
+        LOG_ERROR(" - {}", exe);
+    }
+
+    return false;
 }
 
 int main(int argc, const char* argv[])
@@ -82,18 +103,28 @@ int main(int argc, const char* argv[])
         {
             measurementHandler.addToMeasure(resource);
         }
-        eventQueue.load();
+        // eventQueue.load();
         setupSignalHandlers();
         measurementHandler.sendMyMeasurement();
-        measurementHandler.waitForRemoteMeasurements(
-            [](MeasurementHandler::MeasurementResult result) {
-                LOG_INFO("All measurements received, results:");
-                for (const auto& [exePath, success] : result)
-                {
-                    LOG_INFO("Executable: {}, Success: {}", exePath,
-                             success ? "Yes" : "No");
-                }
-            });
+
+        auto pkeyptr = loadPrvateKey(privkey);
+        auto caname = generateCAName("BMC CA");
+        CertificateExchanger exchanger(pkeyptr.get(),
+                                       caname.get(), // Create a new X509_NAME
+                                       eventQueue, io_context);
+        measurementHandler.waitForRemoteMeasurements([&exchanger](
+                                                         MeasurementHandler::
+                                                             MeasurementResult
+                                                                 result) {
+            LOG_DEBUG("All measurements received, results:");
+            if (checkMeasurementResult(result))
+            {
+                LOG_INFO(
+                    "All measurements passed successfully. Sending certificates.");
+                exchanger.sendCertificates();
+            }
+        });
+
         io_context.run();
     }
     catch (const std::exception& e)

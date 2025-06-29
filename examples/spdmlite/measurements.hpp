@@ -169,11 +169,11 @@ struct MeasurementHandler
     {
         eventQueue.addEventProvider(
             FETCH_MEASUREMENT_EVENT,
-            std::bind_front(&MeasurementHandler::takeMeasurementProvider,
+            std::bind_front(&MeasurementHandler::fetchMeasurementProvider,
                             this));
         eventQueue.addEventConsumer(
             FETCH_MEASUREMENT_EVENT,
-            std::bind_front(&MeasurementHandler::takeMeasurementConsumer,
+            std::bind_front(&MeasurementHandler::fetchMeasurementConsumer,
                             this));
         eventQueue.addEventConsumer(
             MEASUREMENT_REQUEST_EVENT,
@@ -241,7 +241,7 @@ struct MeasurementHandler
         LOG_ERROR("Failed to start measurement consumer: {}", eventReplay);
         co_return boost::system::error_code{};
     }
-    net::awaitable<boost::system::error_code> takeMeasurementProvider(
+    net::awaitable<boost::system::error_code> fetchMeasurementProvider(
         Streamer streamer, const std::string& eventReplay)
     {
         LOG_DEBUG("Received event: {}", eventReplay);
@@ -267,7 +267,7 @@ struct MeasurementHandler
         LOG_DEBUG("Measurement Failed {}", eventReplay);
         co_return boost::system::error_code{};
     }
-    net::awaitable<boost::system::error_code> takeMeasurementConsumer(
+    net::awaitable<boost::system::error_code> fetchMeasurementConsumer(
         Streamer streamer, const std::string& event)
     {
         LOG_DEBUG("Received event: {}", event);
