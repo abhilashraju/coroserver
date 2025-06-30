@@ -40,11 +40,6 @@ class TaskQueue
             return client.isOpen();
         }
     };
-    struct EndPoint
-    {
-        std::string url;
-        std::string port;
-    };
     struct NetworkTask
     {
         Task task;
@@ -56,12 +51,39 @@ class TaskQueue
     };
 
   public:
+    struct EndPoint
+    {
+        std::string url;
+        std::string port;
+        operator bool() const
+        {
+            return !url.empty();
+        }
+    };
+
+  public:
+    TaskQueue(net::any_io_executor ioContext, net::ssl::context& sslContext,
+              int maxConnections = 1) :
+        sslContext(sslContext), ioContext(ioContext), maxClients(maxConnections)
+    {}
     TaskQueue(net::any_io_executor ioContext, net::ssl::context& sslContext,
               const std::string& url, const std::string& port,
               int maxConnections = 1) :
         endPoint{url, port}, sslContext(sslContext), ioContext(ioContext),
         maxClients(maxConnections)
     {}
+    void setEndPoint(const std::string& url, const std::string& port)
+    {
+        endPoint = EndPoint{url, port};
+
+        net::co_spawn(ioContext,
+                      std::bind_front(&TaskQueue::processTasks, this),
+                      net::detached);
+    }
+    auto getEndPoint() const
+    {
+        return endPoint;
+    }
     void addTask(Task messageHandler, bool front = false)
     {
         bool processNow = taskHandlers.size() < maxClients;
@@ -122,6 +144,11 @@ class TaskQueue
     }
     net::awaitable<void> processTasks()
     {
+        if (!endPoint)
+        {
+            LOG_INFO("EndPoint is not set, cannot process tasks");
+            co_return;
+        }
         if (!taskHandlers.empty())
         {
             auto taskEntry = co_await getTask();

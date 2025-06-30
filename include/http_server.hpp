@@ -33,8 +33,8 @@ struct HttpRouter
 {
     struct handler_base
     {
-        virtual boost::asio::awaitable<Response>
-            handle(Request& req, const http_function& vw) = 0;
+        virtual boost::asio::awaitable<Response> handle(
+            Request& req, const http_function& vw) = 0;
         virtual ~handler_base() {}
     };
     using HANDLER_MAP = flat_map<request_mapper, std::unique_ptr<handler_base>>;
@@ -44,8 +44,8 @@ struct HttpRouter
         HandlerFunc func;
         handler(HandlerFunc fun) : func(std::move(fun)) {}
 
-        boost::asio::awaitable<Response>
-            handle(Request& req, const http_function& params) override
+        boost::asio::awaitable<Response> handle(
+            Request& req, const http_function& params) override
         {
             return func(req, params);
         }
@@ -109,8 +109,8 @@ struct HttpRouter
         return empty_handlers;
     }
 
-    boost::asio::awaitable<Response>
-        process_request(auto& reqVariant, tcp::endpoint&& ep)
+    boost::asio::awaitable<Response> process_request(auto& reqVariant,
+                                                     tcp::endpoint&& ep)
     {
         auto httpfunc = parse_function(reqVariant.target());
         httpfunc.setEndpoint(std::move(ep));
@@ -182,8 +182,8 @@ class HttpServer
         });
     }
     template <typename Socket>
-    boost::asio::awaitable<void>
-        handle_client(std::shared_ptr<boost::asio::ssl::stream<Socket>> socket)
+    boost::asio::awaitable<void> handle_client(
+        std::shared_ptr<boost::asio::ssl::stream<Socket>> socket)
     {
         // Perform SSL handshake
         co_await socket->async_handshake(boost::asio::ssl::stream_base::server,
@@ -208,7 +208,7 @@ class HttpServer
         try
         {
             res = co_await router_.process_request(
-                req, acceptor_.get_remote_endpoint(*socket));
+                req, acceptor_.getRemoteEndpoint(*socket));
         }
         catch (const std::exception& e)
         {

@@ -17,6 +17,7 @@ struct EventQueue
     using EventConsumer =
         std::function<net::awaitable<boost::system::error_code>(
             Streamer streamer, const std::string&)>;
+    using EndPoint = TaskQueue::EndPoint;
     struct DefaultEventProvider
     {
         net::awaitable<boost::system::error_code> operator()(
@@ -44,6 +45,22 @@ struct EventQueue
     {
         addEventProvider("default", defaultProvider);
         addEventConsumer("default", defaultConsumer);
+    }
+    EventQueue(net::any_io_executor ioContext, TcpStreamType& acceptor,
+               net::ssl::context& sslClientContext, int maxConnections = 1) :
+        taskQueue(ioContext, sslClientContext, maxConnections),
+        tcpServer(ioContext, acceptor, *this), serializer(EVENTQUEFILE)
+    {
+        addEventProvider("default", defaultProvider);
+        addEventConsumer("default", defaultConsumer);
+    }
+    void setQueEndPoint(const std::string& ip, const std::string& port)
+    {
+        taskQueue.setEndPoint(ip, port);
+    }
+    auto getQueEndPoint() const
+    {
+        return taskQueue.getEndPoint();
     }
     void addEventProvider(const std::string& eventId,
                           EventProvider eventProvider)
@@ -295,6 +312,10 @@ struct EventQueue
                 co_return;
             }
         }
+    }
+    auto getLocalEndpoint() const
+    {
+        return tcpServer.getLocalEndpoint();
     }
 
     std::map<std::string, EventProvider> eventProviders;

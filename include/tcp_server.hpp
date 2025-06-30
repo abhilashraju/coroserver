@@ -17,6 +17,10 @@ class TcpServer
     {
         start_accept();
     }
+    auto getLocalEndpoint() const
+    {
+        return acceptor.getLocalEndpoint();
+    }
 
   private:
     void start_accept()

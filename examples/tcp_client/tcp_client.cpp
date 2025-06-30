@@ -7,20 +7,31 @@
 
 int main(int argc, const char* argv[])
 {
+    auto [ip, port, data] =
+        getArgs(parseCommandline(argc, argv), "--ipaddress,-ip", "--port,-p",
+                "--data,-d");
+    if (!ip || !port)
+    {
+        std::cerr << "Usage: tcp_client -ip <IP> -p <PORT> "
+                     "-d <DATA>";
+        return 1;
+    }
     net::io_context io_context;
 
     net::co_spawn(
         io_context,
-        [&io_context]() -> net::awaitable<void> {
+        [&io_context, ip = std::string(ip.value()),
+         port = std::string(port.value()),
+         data = std::string(data.value())]() -> net::awaitable<void> {
             ssl::context ssl_context(ssl::context::sslv23_client);
             TcpClient client(io_context.get_executor(), ssl_context);
-            auto ec = co_await client.connect("127.0.0.1", "8080");
+            auto ec = co_await client.connect(ip, port);
             if (ec)
             {
                 std::cerr << "Connect error: " << ec.message() << std::endl;
                 co_return;
             }
-            std::string message = "Hello, server!\r\n";
+            std::string message = !data.empty() ? data : "Hello, Server!";
             size_t bytes{0};
             std::tie(ec, bytes) = co_await client.write(net::buffer(message));
             if (ec)

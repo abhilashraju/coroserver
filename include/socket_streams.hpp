@@ -20,6 +20,12 @@ struct TcpStreamType
         acceptor_(io_context, tcp::endpoint(tcp::v4(), port)),
         context(io_context), ssl_context_(ssl_context)
     {}
+    TcpStreamType(net::any_io_executor io_context, const std::string& ip,
+                  short port, boost::asio::ssl::context& ssl_context) :
+        acceptor_(io_context,
+                  tcp::endpoint(boost::asio::ip::make_address(ip), port)),
+        context(io_context), ssl_context_(ssl_context)
+    {}
 
     template <typename Handler>
     void accept(Handler&& handler)
@@ -34,9 +40,13 @@ struct TcpStreamType
                                    }
                                });
     }
-    auto get_remote_endpoint(stream_type& socket)
+    auto getRemoteEndpoint(stream_type& socket)
     {
         return socket.next_layer().remote_endpoint();
+    }
+    auto getLocalEndpoint() const
+    {
+        return acceptor_.local_endpoint();
     }
 };
 
@@ -68,7 +78,7 @@ struct UnixStreamType
                                    }
                                });
     }
-    auto get_remote_endpoint(stream_type& socket)
+    auto getRemoteEndpoint(stream_type& socket)
     {
         return tcp::endpoint();
     }

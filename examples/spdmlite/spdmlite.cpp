@@ -11,6 +11,7 @@
 
 #include <csignal>
 EventQueue* peventQueue{nullptr};
+constexpr auto IP_EVENT = "IPEvent";
 void signalHandler(int signal)
 {
     if (signal == SIGTERM || signal == SIGINT)
@@ -49,7 +50,57 @@ bool checkMeasurementResult(const MeasurementHandler::MeasurementResult& result)
 
     return false;
 }
+net::awaitable<boost::system::error_code> ipEventConsumer(
+    EventQueue* eventQueue, Streamer streamer, const std::string& event)
 
+{
+    LOG_DEBUG("Received event: {}", event);
+    auto [id, body] = parseEvent(event);
+    if (id == IP_EVENT)
+    {
+        auto jsonBody = nlohmann::json::parse(body);
+        auto ip = jsonBody.value("ip", std::string{});
+        if (ip.empty())
+        {
+            LOG_ERROR("No IP address provided in the event body.");
+            co_return boost::asio::error::invalid_argument;
+        }
+        auto port = jsonBody.value("port", std::string{});
+        auto ep = eventQueue->getLocalEndpoint();
+        auto myIp = ep.address().to_string();
+        auto myport = std::to_string(ep.port());
+        if (port.empty())
+        {
+            port = myport;
+        }
+
+        if (eventQueue->getQueEndPoint() != EventQueue::EndPoint{ip, port})
+        {
+            // set the remote endpoint in the event queue
+            eventQueue->setQueEndPoint(ip, port);
+            // send my endpoint to remote side
+            nlohmann::json ipEvent;
+            ipEvent["ip"] = myIp;
+            ipEvent["port"] = myport;
+            eventQueue->addEvent(makeEvent(IP_EVENT, ipEvent.dump()));
+            LOG_INFO("IP address set to: {}, port: {}", ip, port);
+        }
+
+        co_return boost::system::error_code{};
+    }
+
+    co_return boost::system::error_code{};
+}
+void afterMeasurements(CertificateExchanger& exchanger,
+                       MeasurementHandler::MeasurementResult result)
+{
+    LOG_DEBUG("All measurements received, results:");
+    if (checkMeasurementResult(result))
+    {
+        LOG_INFO("All measurements passed successfully. Sending certificates.");
+        exchanger.sendCertificates();
+    }
+}
 int main(int argc, const char* argv[])
 {
     auto [conf] = getArgs(parseCommandline(argc, argv), "--conf,-c");
@@ -64,18 +115,17 @@ int main(int argc, const char* argv[])
     {
         auto json = nlohmann::json::parse(std::ifstream(conf.value().data()));
 
-        auto dest = json.value("remote", std::string{});
         auto cert = json.value("cert", std::string{});
         auto privkey = json.value("privkey", std::string{});
         auto pubkey = json.value("pubkey", std::string{});
-        auto rp = json.value("remote-port", std::string{});
         auto port = json.value("port", std::string{});
+        auto myip = json.value("ip", std::string{"0.0.0.0"});
         std::vector<std::string> resources =
             json.value("resources", std::vector<std::string>{});
         auto maxConnections = 1;
 
         reactor::Logger<std::ostream>& logger = reactor::getLogger();
-        logger.setLogLevel(reactor::LogLevel::INFO);
+        logger.setLogLevel(reactor::LogLevel::DEBUG);
         net::io_context io_context;
         ssl::context ssl_server_context(ssl::context::sslv23_server);
 
@@ -91,12 +141,13 @@ int main(int argc, const char* argv[])
                 privkey, boost::asio::ssl::context::pem);
         }
         ssl::context ssl_client_context(ssl::context::sslv23_client);
-        TcpStreamType acceptor(io_context.get_executor(),
+        TcpStreamType acceptor(io_context.get_executor(), myip,
                                std::atoi(port.data()), ssl_server_context);
         EventQueue eventQueue(io_context.get_executor(), acceptor,
-                              ssl_client_context, dest, rp, maxConnections);
+                              ssl_client_context, maxConnections);
         peventQueue = &eventQueue;
-
+        eventQueue.addEventConsumer(
+            IP_EVENT, std::bind_front(ipEventConsumer, &eventQueue));
         MeasurementHandler measurementHandler(privkey, pubkey, eventQueue,
                                               io_context);
         for (const auto& resource : resources)
@@ -112,18 +163,8 @@ int main(int argc, const char* argv[])
         CertificateExchanger exchanger(pkeyptr.get(),
                                        caname.get(), // Create a new X509_NAME
                                        eventQueue, io_context);
-        measurementHandler.waitForRemoteMeasurements([&exchanger](
-                                                         MeasurementHandler::
-                                                             MeasurementResult
-                                                                 result) {
-            LOG_DEBUG("All measurements received, results:");
-            if (checkMeasurementResult(result))
-            {
-                LOG_INFO(
-                    "All measurements passed successfully. Sending certificates.");
-                exchanger.sendCertificates();
-            }
-        });
+        measurementHandler.waitForRemoteMeasurements(
+            std::bind_front(&afterMeasurements, std::ref(exchanger)));
 
         io_context.run();
     }
