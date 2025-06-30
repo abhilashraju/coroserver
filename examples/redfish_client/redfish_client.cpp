@@ -28,12 +28,15 @@ int main(int argc, const char* argv[])
     reactor::getLogger().setLogLevel(reactor::LogLevel::DEBUG);
     try
     {
-        auto [ep] = getArgs(parseCommandline(argc, argv), "--url,-u");
+        auto [user, pswd, ep] =
+            getArgs(parseCommandline(argc, argv), "--user,-u", "--password,-p",
+                    "--target,-t");
 
         if (!ep.has_value())
         {
             LOG_ERROR("Usage: redfishclient --url|-u <url>");
-            LOG_ERROR("Usage: redfishclient -u https://host::port/redfish/v1");
+            LOG_ERROR(
+                "Usage: redfishclient -u <user> -p <pswd> -t https://host::port/redfish/v1");
             return EXIT_FAILURE;
         }
         std::string url_str(ep.value());
@@ -49,8 +52,8 @@ int main(int argc, const char* argv[])
         client.withHost(url.host())
             .withPort(url.port().empty() ? "443" : url.port())
             .withProtocol("https")
-            .withUserName("xxxxx")
-            .withPassword("xxxxx");
+            .withUserName(user.value_or("admin").data())
+            .withPassword(pswd.value_or("password").data());
         // Run the TCP client
         net::co_spawn(ioc, std::bind_front(makeRequest, std::ref(client), url),
                       net::detached);
