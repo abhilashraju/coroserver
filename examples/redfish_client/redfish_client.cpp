@@ -49,8 +49,8 @@ int main(int argc, const char* argv[])
         client.withHost(url.host())
             .withPort(url.port().empty() ? "443" : url.port())
             .withProtocol("https")
-            .withUserName("service")
-            .withPassword("Ready4WatsonxChall!");
+            .withUserName("xxxxx")
+            .withPassword("xxxxx");
         // Run the TCP client
         net::co_spawn(ioc, std::bind_front(makeRequest, std::ref(client), url),
                       net::detached);
