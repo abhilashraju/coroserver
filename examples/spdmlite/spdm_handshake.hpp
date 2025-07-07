@@ -1,0 +1,228 @@
+#pragma once
+#include "certificate_exchange.hpp"
+#include "measurements.hpp"
+
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/sha.h>
+
+#include <ranges>
+static constexpr auto SPDM_START = "SPDM_START_REQUEST";
+static constexpr auto MEASUREMENT_REQ_EVENT = "MEASUREMENT_REQ_EVENT";
+static constexpr auto MEASUREMENT_RES_EVENT = "MEASUREMENT_RES_EVENT";
+static constexpr auto MEASUREMENT_DONE_EVENT = "MEASUREMENT_DONE_EVENT";
+struct SpdmHandler
+{
+    MeasurementTaker measurementTaker;
+    MeasurementVerifier measurementVerifier;
+    EventQueue& eventQueue;
+    net::io_context& ioContext;
+    std::vector<std::string> toMeasure;
+    using MeasurementResult = std::map<std::string, bool>;
+
+    SpdmHandler(const std::string& privkeyPath, const std::string& pubKeyPath,
+                EventQueue& eventQueue, net::io_context& ioContext) :
+        measurementTaker(privkeyPath), measurementVerifier(pubKeyPath),
+        eventQueue(eventQueue), ioContext(ioContext)
+    {
+        eventQueue.addEventProvider(
+            SPDM_START, std::bind_front(&SpdmHandler::spdmStartProvider, this));
+        eventQueue.addEventConsumer(
+            SPDM_START, std::bind_front(&SpdmHandler::spdmStartConsumer, this));
+    }
+    SpdmHandler(const SpdmHandler&) = delete;
+    SpdmHandler& operator=(const SpdmHandler&) = delete;
+    SpdmHandler& addToMeasure(const std::string& exePath)
+    {
+        toMeasure.push_back(exePath);
+        return *this;
+    }
+
+    net::awaitable<boost::system::error_code> spdmStartProvider(
+        Streamer streamer, const std::string& eventReplay)
+    {
+        LOG_DEBUG("Received event: {}", eventReplay);
+        auto success =
+            co_await processMeasurementRequest(streamer, eventReplay);
+        if (!success)
+        {
+            LOG_ERROR("Failed to process measurement response");
+            co_return boost::system::error_code{};
+        }
+        auto exchanged = co_await waitForCertExchange(streamer);
+        if (!exchanged)
+        {
+            LOG_ERROR("Failed to exchange certificates");
+        }
+        co_return boost::system::error_code{};
+    }
+    net::awaitable<bool> processMeasurementRequest(
+        Streamer streamer, const std::string& eventReplay)
+    {
+        std::string event = eventReplay;
+        auto [id, body] = parseEvent(event);
+        while (id == MEASUREMENT_REQ_EVENT)
+        {
+            LOG_DEBUG("Received measurement event: {}", body);
+            auto jsonBody = nlohmann::json::parse(body);
+            auto bin = jsonBody.value("bin", std::string{});
+            nlohmann::json response;
+            response["bin"] = bin;
+            if (bin.empty())
+            {
+                response["measurement"] = "NULL";
+                LOG_ERROR("No executable path provided in the event body.");
+            }
+            else
+            {
+                LOG_DEBUG("Starting SPDM measurement for: {}", bin);
+                auto measurement = measurementTaker(bin);
+                response["measurement"] = measurement;
+            }
+            auto replay = makeEvent(MEASUREMENT_RES_EVENT, response.dump());
+            auto [ec, size] = co_await sendHeader(streamer, replay);
+            if (ec)
+            {
+                LOG_ERROR("Failed to send measurement event: {}", ec.message());
+                co_return false;
+            }
+            std::tie(ec, event) = co_await readHeader(streamer);
+            if (ec)
+            {
+                LOG_ERROR("Failed to read response: {}", ec.message());
+                co_return false;
+            }
+            std::tie(id, body) = parseEvent(event);
+        }
+        if (id == MEASUREMENT_DONE_EVENT)
+        {
+            LOG_DEBUG("Measurement done event received: {}", body);
+            auto jsonBody = nlohmann::json::parse(body);
+            auto status = jsonBody.value("status", false);
+            if (status)
+            {
+                LOG_DEBUG("All measurements passed successfully.");
+                co_return true;
+            }
+            co_return false;
+        }
+        LOG_ERROR("Measurement Failed {}", event);
+        co_return false;
+    }
+    net::awaitable<boost::system::error_code> spdmStartConsumer(
+        Streamer streamer, const std::string& event)
+    {
+        LOG_DEBUG("Received event: {}", event);
+        auto [id, body] = parseEvent(event);
+        if (id == SPDM_START)
+        {
+            auto success = co_await startMeasurement(streamer);
+            if (success)
+            {
+                auto success = co_await exchangeCertificate(streamer);
+                if (!success)
+                {
+                    LOG_ERROR("Failed to exchange certificates");
+                }
+            }
+            co_return boost::system::error_code{};
+        }
+        LOG_ERROR("Failed to start SPDM measurement: {}", event);
+        co_return boost::system::error_code{};
+    }
+    void processMeasurement(const std::string& measurement,
+                            const std::string& exePath,
+                            MeasurementResult& measurements)
+    {
+        LOG_DEBUG("measurement response for: {}", exePath);
+        if (!measurement.empty())
+        {
+            nlohmann::json jsonMeasurement;
+            auto result = measurementVerifier(exePath, measurement);
+            LOG_DEBUG("Verification result for measurement: {}",
+                      result ? "Success" : "Failure");
+            measurements[exePath] = result;
+            return;
+        }
+
+        measurements[exePath] = false;
+    }
+    net::awaitable<bool> startMeasurement(Streamer streamer)
+    {
+        MeasurementResult measurements;
+        measurements = MeasurementResult{};
+        for (const auto& exePath : toMeasure)
+        {
+            nlohmann::json request;
+            request["bin"] = exePath;
+            auto [ec, size] = co_await sendHeader(
+                streamer, makeEvent(MEASUREMENT_REQ_EVENT, request.dump()));
+            std::string measurement;
+            std::tie(ec, measurement) = co_await readHeader(streamer);
+            if (ec)
+            {
+                LOG_ERROR("Failed to read measurement response: {}",
+                          ec.message());
+                co_return false;
+            }
+            auto [id, body] = parseEvent(measurement);
+            if (id == MEASUREMENT_RES_EVENT)
+            {
+                LOG_DEBUG("Received measurement response for: {}", exePath);
+                auto jsonBody = nlohmann::json::parse(body);
+                measurement = jsonBody.value("measurement", std::string{});
+                processMeasurement(measurement, exePath, measurements);
+            }
+        }
+        bool success =
+            std::all_of(measurements.begin(), measurements.end(),
+                        [](const auto& pair) { return pair.second; });
+        if (!co_await sendMeasurementDone(streamer, success))
+        {
+            LOG_ERROR("Failed to send measurement response");
+            co_return false;
+        }
+        co_return true;
+    }
+    net::awaitable<bool> sendMeasurementDone(Streamer streamer, bool success)
+    {
+        nlohmann::json jsonBody;
+        jsonBody["status"] = success;
+        auto replay = makeEvent(MEASUREMENT_DONE_EVENT, jsonBody.dump());
+        auto [ec, size] = co_await sendHeader(streamer, replay);
+        if (ec)
+        {
+            LOG_ERROR("Failed to send measurement response: {}", ec.message());
+            co_return false;
+        }
+        LOG_DEBUG("Measurement response sent successfully");
+        co_return true;
+    }
+
+    net::awaitable<bool> exchangeCertificate(Streamer streamer)
+    {
+        auto caname = generateCAName("BMC CA");
+        auto pkeyptr = loadPrivateKey(measurementTaker.privkey);
+        CertificateExchanger exchanger(pkeyptr.get(),
+                                       caname.get(), // Create a new X509_NAME
+                                       eventQueue, ioContext);
+        co_return co_await exchanger.exchange(streamer);
+    }
+    net::awaitable<bool> waitForCertExchange(Streamer streamer)
+    {
+        auto caname = generateCAName("BMC CA");
+        auto pkeyptr = loadPrivateKey(measurementTaker.privkey);
+        CertificateExchanger exchanger(pkeyptr.get(),
+                                       caname.get(), // Create a new X509_NAME
+                                       eventQueue, ioContext);
+        co_return co_await exchanger.waitForExchange(streamer);
+    }
+    void startHandshake()
+    {
+        LOG_DEBUG("Starting SPDM handshake");
+        nlohmann::json jsonBody;
+        jsonBody["bin"] = "spdm_handshake";
+        auto replay = makeEvent(SPDM_START, jsonBody.dump());
+        eventQueue.addEvent(replay);
+    }
+};

@@ -106,9 +106,15 @@ struct RedfishClient
                        password + "\"}"));
 
         auto [ec, res] = co_await webClient.execute<Response>();
-        if (ec)
+        if (ec || res.result() != boost::beast::http::status::created)
         {
-            co_return std::make_tuple(ec, std::string{});
+            LOG_ERROR("Failed to get token: {} for user: {}",
+                      ec ? ec.message() : http_error_to_string.at(res.result()),
+                      userName);
+            co_return std::make_tuple(
+                boost::system::errc::make_error_code(
+                    boost::system::errc::permission_denied),
+                std::string{});
         }
         std::string token = res.base().at("X-Auth-Token");
         co_return std::make_tuple(boost::system::error_code{}, token);
@@ -116,7 +122,7 @@ struct RedfishClient
     AwaitableResult<Response> execute(const Request& req)
     {
         int retryCount = 0;
-        while (retryCount-- < 3)
+        while (retryCount++ < 3)
         {
             WebClient<beast::tcp_stream> webClient(ioc, ctx);
             webClient.withHost(host)
@@ -135,7 +141,8 @@ struct RedfishClient
                 LOG_ERROR("Error executing request: {}", ec.message());
                 co_return std::make_tuple(ec, Response{});
             }
-            if (res.result() != boost::beast::http::status::ok)
+            if (http_error_to_string.find(res.result()) !=
+                http_error_to_string.end())
             {
                 LOG_ERROR("Request failed with status: {} for target: {}",
                           http_error_to_string.at(res.result()), req.target);

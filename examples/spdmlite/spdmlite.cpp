@@ -5,12 +5,12 @@
 #include "eventmethods.hpp"
 #include "eventqueue.hpp"
 #include "logger.hpp"
-#include "measurements.hpp"
+#include "spdm_handshake.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <csignal>
-EventQueue* peventQueue{nullptr};
+
 constexpr auto IP_EVENT = "IPEvent";
 void signalHandler(int signal)
 {
@@ -30,77 +30,15 @@ void setupSignalHandlers()
     std::signal(SIGTERM, signalHandler);
     std::signal(SIGINT, signalHandler);
 }
-bool checkMeasurementResult(const MeasurementHandler::MeasurementResult& result)
+net::awaitable<boost::system::error_code> publisher(
+    EventQueue& eventQue, Streamer streamer, const std::string& event)
 {
-    std::vector<std::string> failedExecutables =
-        std::ranges::views::filter(
-            result, [](const auto& pair) { return !pair.second; }) |
-        std::ranges::views::keys | std::ranges::to<std::vector<std::string>>();
-    if (failedExecutables.empty())
-    {
-        LOG_INFO("All measurements passed successfully.");
-        return true;
-    }
-
-    LOG_ERROR("Failed measurements for executables:");
-    for (const auto& exe : failedExecutables)
-    {
-        LOG_ERROR(" - {}", exe);
-    }
-
-    return false;
-}
-net::awaitable<boost::system::error_code> ipEventConsumer(
-    EventQueue* eventQueue, Streamer streamer, const std::string& event)
-
-{
-    LOG_DEBUG("Received event: {}", event);
-    auto [id, body] = parseEvent(event);
-    if (id == IP_EVENT)
-    {
-        auto jsonBody = nlohmann::json::parse(body);
-        auto ip = jsonBody.value("ip", std::string{});
-        if (ip.empty())
-        {
-            LOG_ERROR("No IP address provided in the event body.");
-            co_return boost::asio::error::invalid_argument;
-        }
-        auto port = jsonBody.value("port", std::string{});
-        auto ep = eventQueue->getLocalEndpoint();
-        auto myIp = ep.address().to_string();
-        auto myport = std::to_string(ep.port());
-        if (port.empty())
-        {
-            port = myport;
-        }
-
-        if (eventQueue->getQueEndPoint() != EventQueue::EndPoint{ip, port})
-        {
-            // set the remote endpoint in the event queue
-            eventQueue->setQueEndPoint(ip, port);
-            // send my endpoint to remote side
-            nlohmann::json ipEvent;
-            ipEvent["ip"] = myIp;
-            ipEvent["port"] = myport;
-            eventQueue->addEvent(makeEvent(IP_EVENT, ipEvent.dump()));
-            LOG_INFO("IP address set to: {}, port: {}", ip, port);
-        }
-
-        co_return boost::system::error_code{};
-    }
-
+    LOG_DEBUG("Received Event for publish: {}", event);
+    auto [id, data] = parseEvent(event);
+    eventQue.addEvent(makeEvent(data));
     co_return boost::system::error_code{};
 }
-void afterMeasurements(CertificateExchanger& exchanger,
-                       MeasurementHandler::MeasurementResult result)
-{
-    LOG_DEBUG("All measurements received, results:");
-    if (checkMeasurementResult(result))
-    {
-        LOG_INFO("All measurements passed successfully. Sending certificates.");
-        exchanger.sendCertificates();
-    }
-}
+
 int main(int argc, const char* argv[])
 {
     auto [conf] = getArgs(parseCommandline(argc, argv), "--conf,-c");
@@ -120,6 +58,8 @@ int main(int argc, const char* argv[])
         auto pubkey = json.value("pubkey", std::string{});
         auto port = json.value("port", std::string{});
         auto myip = json.value("ip", std::string{"0.0.0.0"});
+        auto rip = json.value("remote_ip", std::string{});
+        auto rp = json.value("remote_port", std::string{});
         std::vector<std::string> resources =
             json.value("resources", std::vector<std::string>{});
         auto maxConnections = 1;
@@ -145,26 +85,20 @@ int main(int argc, const char* argv[])
                                std::atoi(port.data()), ssl_server_context);
         EventQueue eventQueue(io_context.get_executor(), acceptor,
                               ssl_client_context, maxConnections);
-        peventQueue = &eventQueue;
-        eventQueue.addEventConsumer(
-            IP_EVENT, std::bind_front(ipEventConsumer, &eventQueue));
-        MeasurementHandler measurementHandler(privkey, pubkey, eventQueue,
-                                              io_context);
-        for (const auto& resource : resources)
+
+        if (!rip.empty() && !rp.empty())
         {
-            measurementHandler.addToMeasure(resource);
+            eventQueue.setQueEndPoint(rip, rp);
         }
+        eventQueue.addEventConsumer(
+            "Publish", std::bind_front(publisher, std::ref(eventQueue)));
         // eventQueue.load();
         setupSignalHandlers();
-        measurementHandler.sendMyMeasurement();
-
-        auto pkeyptr = loadPrvateKey(privkey);
-        auto caname = generateCAName("BMC CA");
-        CertificateExchanger exchanger(pkeyptr.get(),
-                                       caname.get(), // Create a new X509_NAME
-                                       eventQueue, io_context);
-        measurementHandler.waitForRemoteMeasurements(
-            std::bind_front(&afterMeasurements, std::ref(exchanger)));
+        SpdmHandler spdmHandler(privkey, pubkey, eventQueue, io_context);
+        for (const auto& resource : resources)
+        {
+            spdmHandler.addToMeasure(resource);
+        }
 
         io_context.run();
     }

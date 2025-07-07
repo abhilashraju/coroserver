@@ -44,6 +44,7 @@ do_install() {
     install -m 0755 ${B}/examples/journalserver/journalserver ${D}${bindir}/journalserver
     install -m 0755 ${B}/examples/spdmlite/spdmlite ${D}${bindir}/spdmlite
     install -m 0755 ${B}/examples/redfish_client/redfish_client ${D}${bindir}/redfish_client
+    install -m 0755 ${B}/examples/redfish_listener/redfish_listener ${D}${bindir}/redfish_listener
 
     install -d ${D}${sysconfdir}
     install -m 0644 ${S}/examples/spdmlite/server-cert.pem ${D}${sysconfdir}/server-cert.pem

@@ -58,9 +58,6 @@ int main(int argc, const char* argv[])
         net::co_spawn(ioc, std::bind_front(makeRequest, std::ref(client), url),
                       net::detached);
 
-        // Run the Unix domain socket client
-        // net::co_spawn(ioc, run_unix_client(ioc), net::detached);
-
         ioc.run();
     }
     catch (const std::exception& e)

@@ -18,7 +18,7 @@ constexpr auto ENTITY_CERT_PATH = "/tmp/etc/ssl/certs/https/entity_cert.pem";
 template <typename T, void (*Deleter)(T*)>
 using openssl_ptr = std::unique_ptr<T, decltype(Deleter)>;
 
-openssl_ptr<EVP_PKEY, EVP_PKEY_free> loadPrvateKey(const std::string& path)
+openssl_ptr<EVP_PKEY, EVP_PKEY_free> loadPrivateKey(const std::string& path)
 {
     BIO* keybio = BIO_new_file(path.data(), "r");
     if (!keybio)
@@ -252,49 +252,39 @@ struct CertificateExchanger
                          EventQueue& eventQueue, net::io_context& ioContext) :
         ca_pkey(ca_pkey), ca_name(ca_name), eventQueue(eventQueue),
         ioContext(ioContext)
-    {
-        eventQueue.addEventConsumer(
-            INSTALL_CERTIFICATES,
-            std::bind_front(&CertificateExchanger::certificateConsumer, this));
-        eventQueue.addEventProvider(
-            INSTALL_CERTIFICATES,
-            std::bind_front(&CertificateExchanger::certificateProvider, this));
-    }
+    {}
     CertificateExchanger(const CertificateExchanger&) = delete;
     CertificateExchanger& operator=(const CertificateExchanger&) = delete;
-    net::awaitable<boost::system::error_code> certificateConsumer(
-        Streamer streamer, const std::string& event)
+
+    net::awaitable<bool> exchange(Streamer streamer)
     {
-        LOG_DEBUG("Received event: {}", event);
-        auto [id, body] = parseEvent(event);
-        if (id == INSTALL_CERTIFICATES)
+        LOG_DEBUG("Exchanging certificates");
+        if (!co_await sendCertificate(streamer))
         {
-            auto jsonBody = nlohmann::json::parse(body);
-            auto ca = jsonBody["CA"].get<std::string>();
-            auto pkey = jsonBody["PKEY"].get<std::string>();
-            bool installed = installCertificates(ca, pkey);
-            nlohmann::json ret;
-            ret["status"] = installed;
-            co_await sendHeader(
-                streamer, makeEvent(INSTALL_CERTIFICATES_RESP, ret.dump()));
+            LOG_ERROR("Failed to send certificates");
+            co_return false;
         }
-        co_return boost::system::error_code{};
+        if (!co_await recieveCertificate(streamer))
+        {
+            LOG_ERROR("Failed to receive certificate");
+            co_return false;
+        }
+        LOG_DEBUG("Certificate exchange completed successfully");
+        co_return true;
     }
-    net::awaitable<boost::system::error_code> certificateProvider(
-        Streamer streamer, const std::string& event)
+    net::awaitable<bool> waitForExchange(Streamer streamer)
     {
-        LOG_DEBUG("Received event: {}", event);
-        auto [id, body] = parseEvent(event);
-        if (id == INSTALL_CERTIFICATES_RESP)
+        if (!co_await recieveCertificate(streamer))
         {
-            auto jsonBody = nlohmann::json::parse(body);
-            auto installed = jsonBody["status"].get<bool>();
-            if (!installed)
-            {
-                LOG_ERROR("Failed to install certitificates");
-            }
+            LOG_ERROR("Failed to receive certificate");
+            co_return false;
         }
-        co_return boost::system::error_code{};
+        if (!co_await sendCertificate(streamer))
+        {
+            LOG_ERROR("Failed to send certificate");
+            co_return false;
+        }
+        co_return true;
     }
     void createDirectories()
     {
@@ -336,61 +326,126 @@ struct CertificateExchanger
             LOG_ERROR("Failed to create entity certificate");
             return false;
         }
-        if (!saveCertificateToFile(CA_PATH, ca))
-        {
-            LOG_ERROR("Failed to save CA certificate to {}", CA_PATH);
-            return false;
-        }
+
         return true;
     }
-    bool installCertificates(const std::string& castr,
-                             const std::string& pkeystr)
+    bool installCertificates(const std::string& castr)
     {
         openssl_ptr<X509, X509_free> ca(
             PEM_read_bio_X509(BIO_new_mem_buf(castr.data(), castr.size()),
                               nullptr, nullptr, nullptr),
             X509_free);
 
-        openssl_ptr<EVP_PKEY, EVP_PKEY_free> pkey(
-            PEM_read_bio_PrivateKey(
-                BIO_new_mem_buf(pkeystr.data(), pkeystr.size()), nullptr,
-                nullptr, nullptr),
-            EVP_PKEY_free);
-
-        if (!processInterMediateCA(pkey, ca))
+        if (!saveCertificateToFile(CA_PATH, ca))
         {
-            LOG_ERROR("Failed to process intermediate CA");
+            LOG_ERROR("Failed to save CA certificate to {}", CA_PATH);
             return false;
         }
         LOG_DEBUG("Certificates written to {} , {} and {}", CA_PATH, PKEY_PATH,
                   ENTITY_CERT_PATH);
         return true;
     }
-    bool sendCertificates()
+    net::awaitable<bool> sendCertificate(Streamer streamer)
     {
         openssl_ptr<EVP_PKEY, EVP_PKEY_free> pkey(nullptr, EVP_PKEY_free);
         openssl_ptr<X509, X509_free> ca(nullptr, X509_free);
         if (!create_intermediate_ca_cert(ca_pkey, ca_name, pkey, ca, "BMC CA"))
         {
             LOG_ERROR("Failed to create intermediate CA certificate");
-            return false;
+            co_return false;
         }
         if (!processInterMediateCA(pkey, ca))
         {
             LOG_ERROR("Failed to process intermediate CA");
-            return false;
+            co_return false;
         }
 
         std::string intermediate_ca =
-            toString(ca);   // Convert to string for sending
-        std::string intermediate_pkey =
-            toString(pkey); // Convert to string for sending
+            toString(ca); // Convert to string for sending
 
         nlohmann::json jsonBody;
         jsonBody["CA"] = intermediate_ca;
-        jsonBody["PKEY"] = intermediate_pkey;
-        auto event = makeEvent(INSTALL_CERTIFICATES, jsonBody.dump());
-        eventQueue.addEvent(event);
-        return true;
+        auto [ec, size] = co_await sendHeader(
+            streamer, makeEvent(INSTALL_CERTIFICATES, jsonBody.dump()));
+        if (ec)
+        {
+            LOG_ERROR("Failed to send INSTALL_CERTIFICATES event: {}",
+                      ec.message());
+            co_return false;
+        }
+        if (!co_await recieveCertificateStatus(streamer))
+        {
+            LOG_ERROR("Failed to Install certificates");
+            co_return false;
+        }
+        LOG_DEBUG("Certificates installed successfully");
+        co_return true;
+    }
+    net::awaitable<bool> recieveCertificateStatus(Streamer streamer)
+    {
+        auto [ec, event] = co_await readHeader(streamer);
+        if (ec)
+        {
+            LOG_ERROR("Failed to read response: {}", ec.message());
+            co_return false;
+        }
+        auto [id, body] = parseEvent(event);
+        if (id == INSTALL_CERTIFICATES_RESP)
+        {
+            auto jsonBody = nlohmann::json::parse(body);
+            auto installed = jsonBody["status"].get<bool>();
+            if (!installed)
+            {
+                LOG_ERROR("Failed to install certificates");
+                co_return false;
+            }
+            LOG_DEBUG("Certificates installed successfully");
+            co_return true;
+        }
+
+        LOG_ERROR("Unexpected event ID: {}", id);
+        co_return false;
+    }
+    net::awaitable<bool> sendInstallStatus(Streamer& streamer, bool status)
+    {
+        nlohmann::json jsonBody;
+        jsonBody["status"] = status;
+        auto [ec, size] = co_await sendHeader(
+            streamer, makeEvent(INSTALL_CERTIFICATES_RESP, jsonBody.dump()));
+        if (ec)
+        {
+            LOG_ERROR("Failed to send INSTALL_CERTIFICATES_RESP event: {}",
+                      ec.message());
+            co_return false;
+        }
+        co_return status;
+    }
+    net::awaitable<bool> recieveCertificate(Streamer streamer)
+    {
+        auto [ec, event] = co_await readHeader(streamer);
+        if (ec)
+        {
+            LOG_ERROR("Failed to read response: {}", ec.message());
+            co_return false;
+        }
+        auto [id, body] = parseEvent(event);
+        if (id == INSTALL_CERTIFICATES)
+        {
+            auto jsonBody = nlohmann::json::parse(body);
+            auto CA = jsonBody["CA"].get<std::string>();
+            if (CA.empty())
+            {
+                LOG_ERROR("CA or PKEY is empty in the event body");
+                co_return co_await sendInstallStatus(streamer, false);
+            }
+            if (!installCertificates(CA))
+            {
+                LOG_ERROR("Failed to install certificates");
+                co_return co_await sendInstallStatus(streamer, false);
+            }
+            co_return co_await sendInstallStatus(streamer, true);
+        }
+        LOG_ERROR("Unexpected event ID: {}", id);
+        co_return false;
     }
 };
