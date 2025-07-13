@@ -1,6 +1,7 @@
 #pragma once
 #include "eventmethods.hpp"
 #include "eventqueue.hpp"
+#include "globaldefs.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -9,15 +10,197 @@
 
 #include <memory>
 #include <string>
+
 constexpr auto INSTALL_CERTIFICATES = "InstallCertificates";
 constexpr auto INSTALL_CERTIFICATES_RESP = "InstallCertificatesResp";
-constexpr auto CA_PATH = "/tmp/etc/ssl/certs/ca.pem";
-constexpr auto PKEY_PATH = "/tmp/etc/ssl/private/pkey.pem";
-constexpr auto ENTITY_CERT_PATH = "/tmp/etc/ssl/certs/https/entity_cert.pem";
+
 // Helper for unique_ptr with OpenSSL types
 template <typename T, void (*Deleter)(T*)>
 using openssl_ptr = std::unique_ptr<T, decltype(Deleter)>;
+using X509Ptr = openssl_ptr<X509, X509_free>;
+X509Ptr makeX509Ptr(X509* ptr)
+{
+    return X509Ptr(ptr, X509_free);
+}
+using EVP_PKEYPtr = openssl_ptr<EVP_PKEY, EVP_PKEY_free>;
+EVP_PKEYPtr makeEVPPKeyPtr(EVP_PKEY* ptr)
+{
+    return EVP_PKEYPtr(ptr, EVP_PKEY_free);
+}
 
+using EVP_PKEYPtr = openssl_ptr<EVP_PKEY, EVP_PKEY_free>;
+
+// Convert PEM certificate file to DER format and save to file
+bool pemCertToDer(const std::string& pemPath, const std::string& derPath)
+{
+    FILE* pemFile = fopen(pemPath.c_str(), "r");
+    if (!pemFile)
+        return false;
+    X509Ptr cert =
+        makeX509Ptr(PEM_read_X509(pemFile, nullptr, nullptr, nullptr));
+    fclose(pemFile);
+    if (!cert)
+        return false;
+
+    FILE* derFile = fopen(derPath.c_str(), "wb");
+    if (!derFile)
+    {
+        return false;
+    }
+    int ret = i2d_X509_fp(derFile, cert.get());
+    fclose(derFile);
+    return ret == 1;
+}
+
+// Convert DER certificate file to PEM format and save to file
+bool derCertToPem(const std::string& derPath, const std::string& pemPath)
+{
+    FILE* derFile = fopen(derPath.c_str(), "rb");
+    if (!derFile)
+        return false;
+    X509Ptr cert = makeX509Ptr(d2i_X509_fp(derFile, nullptr));
+    fclose(derFile);
+    if (!cert)
+        return false;
+
+    FILE* pemFile = fopen(pemPath.c_str(), "w");
+    if (!pemFile)
+    {
+        return false;
+    }
+    int ret = PEM_write_X509(pemFile, cert.get());
+    fclose(pemFile);
+    return ret == 1;
+}
+
+// Convert PEM private key file to DER format and save to file
+bool pemKeyToDer(const std::string& pemPath, const std::string& derPath)
+{
+    FILE* pemFile = fopen(pemPath.c_str(), "r");
+    if (!pemFile)
+        return false;
+    EVP_PKEYPtr pkey =
+        makeEVPPKeyPtr(PEM_read_PrivateKey(pemFile, nullptr, nullptr, nullptr));
+    fclose(pemFile);
+    if (!pkey)
+        return false;
+
+    FILE* derFile = fopen(derPath.c_str(), "wb");
+    if (!derFile)
+    {
+        return false;
+    }
+    int ret = i2d_PrivateKey_fp(derFile, pkey.get());
+    fclose(derFile);
+
+    return ret == 1;
+}
+
+// Convert DER private key file to PEM format and save to file
+bool derKeyToPem(const std::string& derPath, const std::string& pemPath)
+{
+    FILE* derFile = fopen(derPath.c_str(), "rb");
+    if (!derFile)
+        return false;
+    EVP_PKEYPtr pkey = makeEVPPKeyPtr(d2i_PrivateKey_fp(derFile, nullptr));
+    fclose(derFile);
+    if (!pkey)
+        return false;
+
+    FILE* pemFile = fopen(pemPath.c_str(), "w");
+    if (!pemFile)
+    {
+        return false;
+    }
+    int ret = PEM_write_PrivateKey(pemFile, pkey.get(), nullptr, nullptr, 0,
+                                   nullptr, nullptr);
+    fclose(pemFile);
+    return ret == 1;
+}
+bool loadTpm2(boost::asio::ssl::context& ctx)
+{
+    // Attempt to load certificate and private key from TPM2 using OpenSSL
+    // engine This assumes the TPM2 OpenSSL engine is installed and configured
+    // Example key URI: "tpm2tss-engine:0x81010001"
+    const char* tpm2_engine_id = "tpm2tss";
+    const char* tpm2_key_id =
+        "0x81010001"; // Change as appropriate for your TPM
+
+    ENGINE_load_dynamic();
+    ENGINE* e = ENGINE_by_id(tpm2_engine_id);
+    if (!e)
+    {
+        LOG_ERROR("Failed to load TPM2 engine '{}'", tpm2_engine_id);
+        return false;
+    }
+    if (!ENGINE_init(e))
+    {
+        LOG_ERROR("Failed to initialize TPM2 engine");
+        ENGINE_free(e);
+        return false;
+    }
+
+    // Load private key from TPM2
+    EVP_PKEY* pkey = ENGINE_load_private_key(e, tpm2_key_id, nullptr, nullptr);
+    if (!pkey)
+    {
+        LOG_ERROR("Failed to load private key from TPM2");
+        ENGINE_finish(e);
+        ENGINE_free(e);
+        return false;
+    }
+
+    // Load certificate from file or TPM2 (usually certificate is not in TPM2,
+    // so load from file)
+    FILE* certfile = fopen(ENTITY_CERT_PATH, "r");
+    if (!certfile)
+    {
+        LOG_ERROR("Failed to open entity certificate file: {}",
+                  ENTITY_CERT_PATH);
+        EVP_PKEY_free(pkey);
+        ENGINE_finish(e);
+        ENGINE_free(e);
+        return false;
+    }
+    X509* cert = PEM_read_X509(certfile, nullptr, nullptr, nullptr);
+    fclose(certfile);
+    if (!cert)
+    {
+        LOG_ERROR("Failed to read entity certificate from file");
+        EVP_PKEY_free(pkey);
+        ENGINE_finish(e);
+        ENGINE_free(e);
+        return false;
+    }
+
+    // Set certificate and private key in SSL context
+    if (SSL_CTX_use_certificate(ctx.native_handle(), cert) != 1)
+    {
+        LOG_ERROR("Failed to set certificate in SSL context");
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        ENGINE_finish(e);
+        ENGINE_free(e);
+        return false;
+    }
+    if (SSL_CTX_use_PrivateKey(ctx.native_handle(), pkey) != 1)
+    {
+        LOG_ERROR("Failed to set private key in SSL context");
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        ENGINE_finish(e);
+        ENGINE_free(e);
+        return false;
+    }
+
+    X509_free(cert);
+    EVP_PKEY_free(pkey);
+    ENGINE_finish(e);
+    ENGINE_free(e);
+
+    LOG_DEBUG("Loaded certificate and private key from TPM2");
+    return true;
+}
 openssl_ptr<EVP_PKEY, EVP_PKEY_free> loadPrivateKey(const std::string& path)
 {
     BIO* keybio = BIO_new_file(path.data(), "r");
@@ -286,25 +469,7 @@ struct CertificateExchanger
         }
         co_return true;
     }
-    void createDirectories()
-    {
-        if (std::filesystem::exists(
-                std::filesystem::path(CA_PATH).parent_path()) &&
-            std::filesystem::exists(
-                std::filesystem::path(PKEY_PATH).parent_path()) &&
-            std::filesystem::exists(
-                std::filesystem::path(ENTITY_CERT_PATH).parent_path()))
-        {
-            LOG_DEBUG("Directories already exist, skipping creation");
-            return;
-        }
-        std::filesystem::create_directories(
-            std::filesystem::path(CA_PATH).parent_path());
-        std::filesystem::create_directories(
-            std::filesystem::path(PKEY_PATH).parent_path());
-        std::filesystem::create_directories(
-            std::filesystem::path(ENTITY_CERT_PATH).parent_path());
-    }
+
     bool processInterMediateCA(const openssl_ptr<EVP_PKEY, EVP_PKEY_free>& pkey,
                                const openssl_ptr<X509, X509_free>& ca)
     {
@@ -318,8 +483,9 @@ struct CertificateExchanger
             LOG_ERROR("Failed to read CA certificate from provided data");
             return false;
         }
-        auto caname = generateCAName("BMC CA");
-        createDirectories();
+        auto caname = openssl_ptr<X509_NAME, X509_NAME_free>(
+            X509_NAME_dup(X509_get_subject_name(ca.get())), X509_NAME_free);
+        createCertDirectories();
         if (!createAndSaveEntityCertificate(pkey.get(), caname.get(),
                                             "BMC Entity"))
         {

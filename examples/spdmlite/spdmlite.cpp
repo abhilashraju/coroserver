@@ -5,12 +5,13 @@
 #include "eventmethods.hpp"
 #include "eventqueue.hpp"
 #include "logger.hpp"
+#include "pic_controller.hpp"
+#include "sdbus_calls.hpp"
 #include "spdm_handshake.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <csignal>
-
 constexpr auto IP_EVENT = "IPEvent";
 void signalHandler(int signal)
 {
@@ -99,7 +100,15 @@ int main(int argc, const char* argv[])
         {
             spdmHandler.addToMeasure(resource);
         }
-
+        auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
+        PicController picController(conn, [&eventQueue](bool state) {
+            LOG_INFO("Provisioning state changed: {}", state);
+            if (state)
+            {
+                eventQueue.addEvent(makeEvent(SPDM_START, ""));
+            }
+        });
+        conn->request_name(PicController::busName.data());
         io_context.run();
     }
     catch (const std::exception& e)

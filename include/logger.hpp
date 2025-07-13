@@ -25,7 +25,7 @@ class Logger
         if (isLogLevelEnabled(level))
         {
             output << std::format("{}:{} ", filename, lineNumber) << message
-                   << "\n";
+                   << std::endl;
         }
     }
 

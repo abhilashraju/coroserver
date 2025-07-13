@@ -13,7 +13,5 @@ install_data(
     'service/event_broker.service',
     install_dir: '/etc/systemd/system',
 )
-install_data('server-cert.pem', install_dir: '/tmp')
-install_data('server-key.pem', install_dir: '/tmp')
 subdir('plugins')
 subdir('publisher')

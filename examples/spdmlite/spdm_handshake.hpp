@@ -49,11 +49,35 @@ struct SpdmHandler
             LOG_ERROR("Failed to process measurement response");
             co_return boost::system::error_code{};
         }
+        LOG_INFO("SPDM measurement completed successfully");
+        LOG_INFO("Waiting for certificate exchange");
         auto exchanged = co_await waitForCertExchange(streamer);
         if (!exchanged)
         {
             LOG_ERROR("Failed to exchange certificates");
         }
+        co_return boost::system::error_code{};
+    }
+    net::awaitable<boost::system::error_code> spdmStartConsumer(
+        Streamer streamer, const std::string& event)
+    {
+        LOG_DEBUG("Received event: {}", event);
+        auto [id, body] = parseEvent(event);
+        if (id == SPDM_START)
+        {
+            auto success = co_await startMeasurement(streamer);
+            if (success)
+            {
+                LOG_INFO("Starting Certificate Exchange");
+                auto success = co_await exchangeCertificate(streamer);
+                if (!success)
+                {
+                    LOG_ERROR("Failed to exchange certificates");
+                }
+            }
+            co_return boost::system::error_code{};
+        }
+        LOG_ERROR("Failed to start SPDM measurement: {}", event);
         co_return boost::system::error_code{};
     }
     net::awaitable<bool> processMeasurementRequest(
@@ -63,7 +87,7 @@ struct SpdmHandler
         auto [id, body] = parseEvent(event);
         while (id == MEASUREMENT_REQ_EVENT)
         {
-            LOG_DEBUG("Received measurement event: {}", body);
+            LOG_DEBUG("Received measurement Req event: {}", body);
             auto jsonBody = nlohmann::json::parse(body);
             auto bin = jsonBody.value("bin", std::string{});
             nlohmann::json response;
@@ -75,7 +99,7 @@ struct SpdmHandler
             }
             else
             {
-                LOG_DEBUG("Starting SPDM measurement for: {}", bin);
+                LOG_DEBUG("Computing measurement for: {}", bin);
                 auto measurement = measurementTaker(bin);
                 response["measurement"] = measurement;
             }
@@ -109,27 +133,7 @@ struct SpdmHandler
         LOG_ERROR("Measurement Failed {}", event);
         co_return false;
     }
-    net::awaitable<boost::system::error_code> spdmStartConsumer(
-        Streamer streamer, const std::string& event)
-    {
-        LOG_DEBUG("Received event: {}", event);
-        auto [id, body] = parseEvent(event);
-        if (id == SPDM_START)
-        {
-            auto success = co_await startMeasurement(streamer);
-            if (success)
-            {
-                auto success = co_await exchangeCertificate(streamer);
-                if (!success)
-                {
-                    LOG_ERROR("Failed to exchange certificates");
-                }
-            }
-            co_return boost::system::error_code{};
-        }
-        LOG_ERROR("Failed to start SPDM measurement: {}", event);
-        co_return boost::system::error_code{};
-    }
+
     void processMeasurement(const std::string& measurement,
                             const std::string& exePath,
                             MeasurementResult& measurements)
@@ -179,10 +183,10 @@ struct SpdmHandler
                         [](const auto& pair) { return pair.second; });
         if (!co_await sendMeasurementDone(streamer, success))
         {
-            LOG_ERROR("Failed to send measurement response");
+            LOG_ERROR("Failed to send measurement Done");
             co_return false;
         }
-        co_return true;
+        co_return success;
     }
     net::awaitable<bool> sendMeasurementDone(Streamer streamer, bool success)
     {
@@ -192,10 +196,10 @@ struct SpdmHandler
         auto [ec, size] = co_await sendHeader(streamer, replay);
         if (ec)
         {
-            LOG_ERROR("Failed to send measurement response: {}", ec.message());
+            LOG_ERROR("Failed to send measurement Done: {}", ec.message());
             co_return false;
         }
-        LOG_DEBUG("Measurement response sent successfully");
+        LOG_INFO("Measurement Done sent successfully");
         co_return true;
     }
 

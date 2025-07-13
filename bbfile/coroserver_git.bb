@@ -33,39 +33,46 @@ S = "${WORKDIR}/git"
 bindir = "/usr/bin"
 plugindir = "/usr/lib/plugins"
 sysconfdir = "/etc/ssl/private"
+systemd_system_unitdir = "/etc/systemd/system"
+varconfdir = "/var/spdm"
+etc_dbus_conf = "/etc/dbus-1/system.d"
 
 do_install() {
-    install -d ${D}${bindir}
-    #install -d ${D}${plugindir}
-    #install -m 0755 ${B}/examples/dbus_inspector/dbus_inspector ${D}${bindir}/dbus_inspector
-    install -m 0755 ${B}/examples/event_broker/event_broker ${D}${bindir}/event_broker
-    #install -m 0755 ${B}/examples/event_broker/plugins/libevent_broker_plugin.so ${D}${plugindir}/libevent_broker_plugin.so
-    install -m 0755 ${B}/examples/event_broker/publisher/event_publisher ${D}${bindir}/event_publisher
-    install -m 0755 ${B}/examples/journalserver/journalserver ${D}${bindir}/journalserver
-    install -m 0755 ${B}/examples/spdmlite/spdmlite ${D}${bindir}/spdmlite
-    install -m 0755 ${B}/examples/redfish_client/redfish_client ${D}${bindir}/redfish_client
-    install -m 0755 ${B}/examples/redfish_listener/redfish_listener ${D}${bindir}/redfish_listener
+     install -d ${D}${bindir}
+     #install -d ${D}${plugindir}
+     #install -m 0755 ${B}/examples/dbus_inspector/dbus_inspector ${D}${bindir}/dbus_inspector
+     install -m 0755 ${B}/examples/event_broker/event_broker ${D}${bindir}/event_broker
+     #install -m 0755 ${B}/examples/event_broker/plugins/libevent_broker_plugin.so ${D}${plugindir}/libevent_broker_plugin.so
+     install -m 0755 ${B}/examples/event_broker/publisher/event_publisher ${D}${bindir}/event_publisher
+     install -m 0755 ${B}/examples/journalserver/journalserver ${D}${bindir}/journalserver
+     install -m 0755 ${B}/examples/spdmlite/spdmlite ${D}${bindir}/spdmlite
+     install -m 0755 ${B}/examples/redfish_client/redfish_client ${D}${bindir}/redfish_client
+     install -m 0755 ${B}/examples/redfish_listener/redfish_listener ${D}${bindir}/redfish_listener
 
-    install -d ${D}${sysconfdir}
-    install -m 0644 ${S}/examples/spdmlite/server-cert.pem ${D}${sysconfdir}/server-cert.pem
-    install -m 0644 ${S}/examples/spdmlite/server-key.pem ${D}${sysconfdir}/server-key.pem
-    install -m 0644 ${S}/examples/spdmlite/public.pem ${D}${sysconfdir}/public.pem
+     install -d ${D}${sysconfdir}
+     install -m 0644 ${S}/examples/spdmlite/server-cert.pem ${D}${sysconfdir}/server-cert.pem
+     install -m 0644 ${S}/examples/spdmlite/server-key.pem ${D}${sysconfdir}/server-key.pem
+     install -m 0644 ${S}/examples/spdmlite/public.pem ${D}${sysconfdir}/public.pem
+
+     install -d ${D}${systemd_system_unitdir}
+     install -d ${D}${etc_dbus_conf}
+     install -d ${D}${varconfdir}
+     
+     install -m 0644 ${S}/examples/spdmlite/service/xyz.openbmc_project.spdmlite.service ${D}${systemd_system_unitdir}/
+     install -m 0644 ${S}/examples/spdmlite/spdm.conf ${D}${varconfdir}/
+     install -m 0644 ${S}/examples/spdmlite/service/xyz.openbmc_project.spdmlite.conf ${D}${etc_dbus_conf}/
 }
 
-# Specify the package information
-FILES_${PN} = "${bindir}/* ${sysconfdir}/*"
-FILES_${PN} += "${plugindir}/*"
-
-# Create a separate package for the plugin
-PACKAGES += "${PN}-plugin"
-FILES_${PN}-plugin = "${plugindir}/libevent_broker_plugin.so"
-
-# Ensure the .so file is not included in the -dev package
-FILES_${PN}-dev = ""
-
-# Suppress the dev-elf QA issue
-INSANE_SKIP_${PN} = "dev-elf"
-INSANE_SKIP_${PN}-plugin = "dev-elf"
-
-# Enable wrap-based subproject downloading
-#EXTRA_OEMESON += "-Dwrap_mode=forcefallback"
+FILES:${PN} += "/usr/bin/journalserver"
+FILES:${PN} += "/usr/bin/redfish_listener"
+FILES:${PN} += "/usr/bin/event_broker"
+FILES:${PN} += "/usr/bin/redfish_client"
+FILES:${PN} += "/usr/bin/spdmlite"
+FILES:${PN} += "/usr/bin/event_publisher"
+FILES:${PN} += "/etc/systemd"
+FILES:${PN} += "/etc/systemd/system"
+FILES:${PN} += "/etc/systemd/system/xyz.openbmc_project.spdmlite.service"
+FILES:${PN} += "/var/spdm"
+FILES:${PN} += "/var/spdm/spdm.conf"
+FILES:${PN} += "/etc/dbus-1/system.d"
+FILES:${PN} += "/etc/dbus-1/system.d/xyz.openbmc_project.spdmlite.conf"
