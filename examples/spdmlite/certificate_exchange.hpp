@@ -441,6 +441,7 @@ struct CertificateExchanger
 
     net::awaitable<bool> exchange(Streamer streamer)
     {
+        createCertDirectories();
         LOG_DEBUG("Exchanging certificates");
         if (!co_await sendCertificate(streamer))
         {
@@ -457,6 +458,7 @@ struct CertificateExchanger
     }
     net::awaitable<bool> waitForExchange(Streamer streamer)
     {
+        createCertDirectories();
         if (!co_await recieveCertificate(streamer))
         {
             LOG_ERROR("Failed to receive certificate");
@@ -485,7 +487,7 @@ struct CertificateExchanger
         }
         auto caname = openssl_ptr<X509_NAME, X509_NAME_free>(
             X509_NAME_dup(X509_get_subject_name(ca.get())), X509_NAME_free);
-        createCertDirectories();
+
         if (!createAndSaveEntityCertificate(pkey.get(), caname.get(),
                                             "BMC Entity"))
         {

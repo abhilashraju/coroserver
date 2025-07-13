@@ -86,6 +86,7 @@ int main(int argc, const char* argv[])
                                std::atoi(port.data()), ssl_server_context);
         EventQueue eventQueue(io_context.get_executor(), acceptor,
                               ssl_client_context, maxConnections);
+        auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
 
         if (!rip.empty() && !rp.empty())
         {
@@ -96,11 +97,19 @@ int main(int argc, const char* argv[])
         // eventQueue.load();
         setupSignalHandlers();
         SpdmHandler spdmHandler(privkey, pubkey, eventQueue, io_context);
+        spdmHandler.setSpdmFinishHandler(
+            [&eventQueue, conn](bool status) -> net::awaitable<void> {
+                LOG_INFO("SPDM Handshake finished with status: {}", status);
+                co_await setProperty(
+                    *conn, PicController::busName, PicController::objPath,
+                    PicController::interface, "ProvisioningState", status);
+                co_return;
+            });
         for (const auto& resource : resources)
         {
             spdmHandler.addToMeasure(resource);
         }
-        auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
+
         PicController picController(conn, [&eventQueue](bool state) {
             LOG_INFO("Provisioning state changed: {}", state);
             if (state)
@@ -108,7 +117,7 @@ int main(int argc, const char* argv[])
                 eventQueue.addEvent(makeEvent(SPDM_START, ""));
             }
         });
-        conn->request_name(PicController::busName.data());
+        conn->request_name(PicController::busName);
         io_context.run();
     }
     catch (const std::exception& e)

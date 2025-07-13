@@ -19,7 +19,8 @@ struct SpdmHandler
     net::io_context& ioContext;
     std::vector<std::string> toMeasure;
     using MeasurementResult = std::map<std::string, bool>;
-
+    using SPDM_FINISH_HANDLER = std::function<net::awaitable<void>(bool)>;
+    SPDM_FINISH_HANDLER onSpdmFinish;
     SpdmHandler(const std::string& privkeyPath, const std::string& pubKeyPath,
                 EventQueue& eventQueue, net::io_context& ioContext) :
         measurementTaker(privkeyPath), measurementVerifier(pubKeyPath),
@@ -29,6 +30,19 @@ struct SpdmHandler
             SPDM_START, std::bind_front(&SpdmHandler::spdmStartProvider, this));
         eventQueue.addEventConsumer(
             SPDM_START, std::bind_front(&SpdmHandler::spdmStartConsumer, this));
+    }
+    void setSpdmFinishHandler(SPDM_FINISH_HANDLER handler)
+    {
+        onSpdmFinish = std::move(handler);
+    }
+    net::awaitable<void> finish(bool status)
+    {
+        LOG_INFO("SPDM Handshake finished with status: {}", status);
+        if (onSpdmFinish)
+        {
+            co_await onSpdmFinish(status);
+        }
+        co_return;
     }
     SpdmHandler(const SpdmHandler&) = delete;
     SpdmHandler& operator=(const SpdmHandler&) = delete;
@@ -47,6 +61,7 @@ struct SpdmHandler
         if (!success)
         {
             LOG_ERROR("Failed to process measurement response");
+            co_await finish(false);
             co_return boost::system::error_code{};
         }
         LOG_INFO("SPDM measurement completed successfully");
@@ -56,6 +71,7 @@ struct SpdmHandler
         {
             LOG_ERROR("Failed to exchange certificates");
         }
+        co_await finish(exchanged);
         co_return boost::system::error_code{};
     }
     net::awaitable<boost::system::error_code> spdmStartConsumer(
