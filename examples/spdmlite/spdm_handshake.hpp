@@ -21,10 +21,11 @@ struct SpdmHandler
     using MeasurementResult = std::map<std::string, bool>;
     using SPDM_FINISH_HANDLER = std::function<net::awaitable<void>(bool)>;
     SPDM_FINISH_HANDLER onSpdmFinish;
-    SpdmHandler(const std::string& privkeyPath, const std::string& pubKeyPath,
+    SpdmHandler(MeasurementTaker mesTaker, MeasurementVerifier mesVerifier,
                 EventQueue& eventQueue, net::io_context& ioContext) :
-        measurementTaker(privkeyPath), measurementVerifier(pubKeyPath),
-        eventQueue(eventQueue), ioContext(ioContext)
+        measurementTaker(std::move(mesTaker)),
+        measurementVerifier(std::move(mesVerifier)), eventQueue(eventQueue),
+        ioContext(ioContext)
     {
         eventQueue.addEventProvider(
             SPDM_START, std::bind_front(&SpdmHandler::spdmStartProvider, this));
@@ -221,20 +222,12 @@ struct SpdmHandler
 
     net::awaitable<bool> exchangeCertificate(Streamer streamer)
     {
-        auto caname = generateCAName("BMC CA");
-        auto pkeyptr = loadPrivateKey(measurementTaker.privkey);
-        CertificateExchanger exchanger(pkeyptr.get(),
-                                       caname.get(), // Create a new X509_NAME
-                                       eventQueue, ioContext);
+        CertificateExchanger exchanger(eventQueue, ioContext);
         co_return co_await exchanger.exchange(streamer);
     }
     net::awaitable<bool> waitForCertExchange(Streamer streamer)
     {
-        auto caname = generateCAName("BMC CA");
-        auto pkeyptr = loadPrivateKey(measurementTaker.privkey);
-        CertificateExchanger exchanger(pkeyptr.get(),
-                                       caname.get(), // Create a new X509_NAME
-                                       eventQueue, ioContext);
+        CertificateExchanger exchanger(eventQueue, ioContext);
         co_return co_await exchanger.waitForExchange(streamer);
     }
     void startHandshake()

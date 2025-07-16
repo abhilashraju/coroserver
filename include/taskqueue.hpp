@@ -246,6 +246,8 @@ class TaskQueue
             {
                 co_return ec;
             }
+            LOG_WARNING("Failed to connect to {}:{}. Retrying {}/{}",
+                        endPoint.url, endPoint.port, i + 1, maxRetryCount);
             timer.expires_after(5s);
             co_await timer.async_wait(net::use_awaitable);
             i++;

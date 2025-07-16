@@ -32,7 +32,9 @@ S = "${WORKDIR}/git"
 # Specify the installation directory
 bindir = "/usr/bin"
 plugindir = "/usr/lib/plugins"
-sysconfdir = "/etc/ssl/private"
+syscadir = "/etc/ssl/certs"
+syscertdir = "/etc/ssl/certs/https"
+sysprivatedir = "/etc/ssl/private"
 systemd_system_unitdir = "/etc/systemd/system"
 varconfdir = "/var/spdm"
 etc_dbus_conf = "/etc/dbus-1/system.d"
@@ -49,10 +51,18 @@ do_install() {
      install -m 0755 ${B}/examples/redfish_client/redfish_client ${D}${bindir}/redfish_client
      install -m 0755 ${B}/examples/redfish_listener/redfish_listener ${D}${bindir}/redfish_listener
 
-     install -d ${D}${sysconfdir}
-     install -m 0644 ${S}/examples/spdmlite/server-cert.pem ${D}${sysconfdir}/server-cert.pem
-     install -m 0644 ${S}/examples/spdmlite/server-key.pem ${D}${sysconfdir}/server-key.pem
-     install -m 0644 ${S}/examples/spdmlite/public.pem ${D}${sysconfdir}/public.pem
+     install -d ${D}${syscadir}
+     install -d ${D}${syscertdir}
+     install -d ${D}${sysprivatedir}
+     install -m 0644 ${S}/examples/spdmlite/certs/client_cert.pem ${D}${syscertdir}/client_cert.pem
+     install -m 0644 ${S}/examples/spdmlite/certs/server_cert.pem ${D}${syscertdir}/server_cert.pem
+     install -m 0644 ${S}/examples/spdmlite/certs/ca.pem ${D}${syscadir}/ca.pem
+     install -m 0644 ${S}/examples/spdmlite/certs/public.pem ${D}${syscadir}/public.pem
+
+     install -m 0644 ${S}/examples/spdmlite/certs/server_pkey.pem ${D}${sysprivatedir}/server_pkey.pem
+     install -m 0644 ${S}/examples/spdmlite/certs/client_pkey.pem ${D}${sysprivatedir}/client_pkey.pem
+     install -m 0644 ${S}/examples/spdmlite/certs/pkey.pem ${D}${sysprivatedir}/pkey.pem
+
 
      install -d ${D}${systemd_system_unitdir}
      install -d ${D}${etc_dbus_conf}

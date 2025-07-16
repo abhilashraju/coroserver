@@ -1,10 +1,12 @@
 #pragma once
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/sha.h>
-
+#include "cert_generator.hpp"
+using EVP_MD_CTX_Ptr = openssl_ptr<EVP_MD_CTX, EVP_MD_CTX_free>;
+inline EVP_MD_CTX_Ptr makeEVPMDCTXPtr(EVP_MD_CTX* ptr)
+{
+    return EVP_MD_CTX_Ptr(ptr, EVP_MD_CTX_free);
+}
 std::string getExecutableMeasurement(const std::string& exePath,
-                                     const std::string& privKeyPath)
+                                     const EVP_PKEYPtr& privKey)
 {
     // Open the executable file
     std::ifstream file(exePath, std::ios::binary);
@@ -15,36 +17,25 @@ std::string getExecutableMeasurement(const std::string& exePath,
     std::vector<unsigned char> fileData((std::istreambuf_iterator<char>(file)),
                                         std::istreambuf_iterator<char>());
 
-    // Load private key
-    EVP_PKEY* pkey = nullptr;
-    {
-        BIO* keybio = BIO_new_file(privKeyPath.data(), "r");
-        if (!keybio)
-            return {};
-        pkey = PEM_read_bio_PrivateKey(keybio, nullptr, nullptr, nullptr);
-        BIO_free(keybio);
-        if (!pkey)
-            return {};
-    }
-
     // Sign the file using EVP_DigestSign* APIs
     std::string signature;
-    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    auto mdctx = makeEVPMDCTXPtr(EVP_MD_CTX_new());
     if (!mdctx)
     {
-        EVP_PKEY_free(pkey);
         return {};
     }
 
-    if (EVP_DigestSignInit(mdctx, nullptr, EVP_sha256(), nullptr, pkey) == 1)
+    if (EVP_DigestSignInit(mdctx.get(), nullptr, EVP_sha256(), nullptr,
+                           privKey.get()) == 1)
     {
-        if (EVP_DigestSignUpdate(mdctx, fileData.data(), fileData.size()) == 1)
+        if (EVP_DigestSignUpdate(mdctx.get(), fileData.data(),
+                                 fileData.size()) == 1)
         {
             size_t sigLen = 0;
-            if (EVP_DigestSignFinal(mdctx, nullptr, &sigLen) == 1)
+            if (EVP_DigestSignFinal(mdctx.get(), nullptr, &sigLen) == 1)
             {
                 std::vector<unsigned char> sig(sigLen);
-                if (EVP_DigestSignFinal(mdctx, sig.data(), &sigLen) == 1)
+                if (EVP_DigestSignFinal(mdctx.get(), sig.data(), &sigLen) == 1)
                 {
                     std::ostringstream oss;
                     for (size_t i = 0; i < sigLen; ++i)
@@ -57,14 +48,10 @@ std::string getExecutableMeasurement(const std::string& exePath,
             }
         }
     }
-
-    EVP_MD_CTX_free(mdctx);
-    EVP_PKEY_free(pkey);
-
     return signature;
 }
 bool verifyExecutableMeasurement(const std::string& exePath,
-                                 const std::string& pubKeyPath,
+                                 const EVP_PKEYPtr& pubKey,
                                  const std::string& signatureHex)
 {
     // Open the executable file
@@ -88,49 +75,33 @@ bool verifyExecutableMeasurement(const std::string& exePath,
         signature[i] = static_cast<unsigned char>(byte);
     }
 
-    // Load public key
-    EVP_PKEY* pkey = nullptr;
-    {
-        BIO* keybio = BIO_new_file(pubKeyPath.data(), "r");
-        if (!keybio)
-            return false;
-        pkey = PEM_read_bio_PUBKEY(keybio, nullptr, nullptr, nullptr);
-        BIO_free(keybio);
-        if (!pkey)
-            return false;
-    }
-
     // Use EVP_DigestVerify* APIs to verify the signature
-    EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
+    auto mdctx = makeEVPMDCTXPtr(EVP_MD_CTX_new());
     if (!mdctx)
     {
-        EVP_PKEY_free(pkey);
         return false;
     }
 
     bool result = false;
-    if (EVP_DigestVerifyInit(mdctx, nullptr, EVP_sha256(), nullptr, pkey) == 1)
+    if (EVP_DigestVerifyInit(mdctx.get(), nullptr, EVP_sha256(), nullptr,
+                             pubKey.get()) == 1)
     {
-        if (EVP_DigestVerifyUpdate(mdctx, fileData.data(), fileData.size()) ==
-            1)
+        if (EVP_DigestVerifyUpdate(mdctx.get(), fileData.data(),
+                                   fileData.size()) == 1)
         {
-            if (EVP_DigestVerifyFinal(mdctx, signature.data(),
+            if (EVP_DigestVerifyFinal(mdctx.get(), signature.data(),
                                       signature.size()) == 1)
             {
                 result = true;
             }
         }
     }
-
-    EVP_MD_CTX_free(mdctx);
-    EVP_PKEY_free(pkey);
-
     return result;
 }
 struct MeasurementTaker
 {
-    std::string privkey;
-    MeasurementTaker(const std::string& privkeyPath) : privkey(privkeyPath) {}
+    EVP_PKEYPtr privkey;
+    MeasurementTaker(EVP_PKEYPtr pKey) : privkey(std::move(pKey)) {}
     std::string operator()(const std::string& exePath)
     {
         return getExecutableMeasurement(exePath, privkey);
@@ -138,8 +109,8 @@ struct MeasurementTaker
 };
 struct MeasurementVerifier
 {
-    std::string pubkey;
-    MeasurementVerifier(const std::string& pubKey) : pubkey(pubKey) {}
+    EVP_PKEYPtr pubkey;
+    MeasurementVerifier(EVP_PKEYPtr pKey) : pubkey(std::move(pKey)) {}
     bool operator()(const std::string& exePath, const std::string& measurement)
     {
         return verifyExecutableMeasurement(exePath, pubkey, measurement);

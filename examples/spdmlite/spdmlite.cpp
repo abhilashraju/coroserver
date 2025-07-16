@@ -54,13 +54,17 @@ int main(int argc, const char* argv[])
     {
         auto json = nlohmann::json::parse(std::ifstream(conf.value().data()));
 
-        auto cert = json.value("cert", std::string{});
-        auto privkey = json.value("privkey", std::string{});
-        auto pubkey = json.value("pubkey", std::string{});
+        auto servercert = json.value("server-cert", std::string{});
+        auto serverprivkey = json.value("server-pkey", std::string{});
+        auto clientcert = json.value("client-cert", std::string{});
+        auto clientprivkey = json.value("client-pkey", std::string{});
+        auto signprivkey = json.value("sign-privkey", std::string{});
+        auto signcert = json.value("sign-cert", std::string{});
         auto port = json.value("port", std::string{});
         auto myip = json.value("ip", std::string{"0.0.0.0"});
         auto rip = json.value("remote_ip", std::string{});
         auto rp = json.value("remote_port", std::string{});
+
         std::vector<std::string> resources =
             json.value("resources", std::vector<std::string>{});
         auto maxConnections = 1;
@@ -75,13 +79,22 @@ int main(int argc, const char* argv[])
             boost::asio::ssl::context::default_workarounds |
             boost::asio::ssl::context::no_sslv2 |
             boost::asio::ssl::context::single_dh_use);
-        if (!cert.empty())
-        {
-            ssl_server_context.use_certificate_chain_file(cert);
-            ssl_server_context.use_private_key_file(
-                privkey, boost::asio::ssl::context::pem);
-        }
+        ssl_server_context.load_verify_file("/etc/ssl/certs/ca.pem");
+        ssl_server_context.set_verify_mode(boost::asio::ssl::verify_peer);
+        ssl_server_context.use_certificate_chain_file(servercert);
+        ssl_server_context.use_private_key_file(serverprivkey,
+                                                boost::asio::ssl::context::pem);
+
         ssl::context ssl_client_context(ssl::context::sslv23_client);
+        ssl_client_context.set_options(
+            boost::asio::ssl::context::default_workarounds |
+            boost::asio::ssl::context::no_sslv2 |
+            boost::asio::ssl::context::single_dh_use);
+        ssl_client_context.load_verify_file("/etc/ssl/certs/ca.pem");
+        ssl_client_context.set_verify_mode(boost::asio::ssl::verify_peer);
+        ssl_client_context.use_certificate_chain_file(clientcert);
+        ssl_client_context.use_private_key_file(clientprivkey,
+                                                boost::asio::ssl::context::pem);
         TcpStreamType acceptor(io_context.get_executor(), myip,
                                std::atoi(port.data()), ssl_server_context);
         EventQueue eventQueue(io_context.get_executor(), acceptor,
@@ -96,7 +109,16 @@ int main(int argc, const char* argv[])
             "Publish", std::bind_front(publisher, std::ref(eventQueue)));
         // eventQueue.load();
         setupSignalHandlers();
-        SpdmHandler spdmHandler(privkey, pubkey, eventQueue, io_context);
+        auto verifyCert = loadCertificate(signcert);
+        if (!verifyCert)
+        {
+            LOG_ERROR("Failed to load signing certificate from {}", signcert);
+            return 1;
+        }
+        SpdmHandler spdmHandler(
+            MeasurementTaker(loadPrivateKey(signprivkey)),
+            MeasurementVerifier(getPublicKeyFromCert(verifyCert)), eventQueue,
+            io_context);
         spdmHandler.setSpdmFinishHandler(
             [&eventQueue, conn](bool status) -> net::awaitable<void> {
                 LOG_INFO("SPDM Handshake finished with status: {}", status);
@@ -111,13 +133,15 @@ int main(int argc, const char* argv[])
         }
 
         PicController picController(conn, [&eventQueue](bool state) {
-            LOG_INFO("Provisioning state changed: {}", state);
+            LOG_INFO("Request for provision {}", state);
             if (state)
             {
                 eventQueue.addEvent(makeEvent(SPDM_START, ""));
             }
         });
-        conn->request_name(PicController::busName);
+        LOG_DEBUG("Getting dbus connectionb{}", PicController::busName);
+
+        // conn->request_name(PicController::busName);
         io_context.run();
     }
     catch (const std::exception& e)

@@ -15,9 +15,9 @@ namespace net = boost::asio;
 namespace ssl = boost::asio::ssl;
 using tcp = boost::asio::ip::tcp;
 
-inline AwaitableResult<net::ip::tcp::resolver::results_type>
-    awaitable_resolve(typename net::ip::tcp::resolver& resolver,
-                      const std::string& host, const std::string& port)
+inline AwaitableResult<net::ip::tcp::resolver::results_type> awaitable_resolve(
+    typename net::ip::tcp::resolver& resolver, const std::string& host,
+    const std::string& port)
 {
     auto h = make_awaitable_handler<net::ip::tcp::resolver::results_type>(
         [&](auto promise) {
@@ -48,23 +48,37 @@ class TcpClient
         timer_->cancel();
     }
 
-    net::awaitable<boost::system::error_code>
-        connect(const std::string& host, const std::string& port)
+    net::awaitable<boost::system::error_code> connect(const std::string& host,
+                                                      const std::string& port)
     {
         auto [ec, results] = co_await awaitable_resolve(resolver_, host, port);
         if (ec)
+        {
+            LOG_ERROR("Error resolving {}:{}. Error: {}", host, port,
+                      ec.message());
             co_return ec;
+        }
+
         TimedStreamer streamer(stream_, timer_);
         streamer.setTimeout(30s);
         co_await net::async_connect(
             stream_->next_layer(), results,
             net::redirect_error(net::use_awaitable, ec));
         if (ec)
+        {
+            LOG_ERROR("Error connecting to {}:{}. Error: {}", host, port,
+                      ec.message());
             co_return ec;
+        }
         streamer.setTimeout(30s);
         co_await stream_->async_handshake(
             ssl::stream_base::client,
             net::redirect_error(net::use_awaitable, ec));
+        if (ec)
+        {
+            LOG_ERROR("Error during SSL handshake with {}:{}. Error: {}", host,
+                      port, ec.message());
+        }
         co_return ec;
     }
 
