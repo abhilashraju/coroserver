@@ -57,11 +57,10 @@ do_install() {
      install -m 0644 ${S}/examples/spdmlite/certs/client_cert.pem ${D}${syscertdir}/client_cert.pem
      install -m 0644 ${S}/examples/spdmlite/certs/server_cert.pem ${D}${syscertdir}/server_cert.pem
      install -m 0644 ${S}/examples/spdmlite/certs/ca.pem ${D}${syscadir}/ca.pem
-     install -m 0644 ${S}/examples/spdmlite/certs/public.pem ${D}${syscadir}/public.pem
-
-     install -m 0644 ${S}/examples/spdmlite/certs/server_pkey.pem ${D}${sysprivatedir}/server_pkey.pem
-     install -m 0644 ${S}/examples/spdmlite/certs/client_pkey.pem ${D}${sysprivatedir}/client_pkey.pem
-     install -m 0644 ${S}/examples/spdmlite/certs/pkey.pem ${D}${sysprivatedir}/pkey.pem
+   
+     install -m 0644 ${S}/examples/spdmlite/certs/server_key.pem ${D}${sysprivatedir}/server_key.pem
+     install -m 0644 ${S}/examples/spdmlite/certs/client_key.pem ${D}${sysprivatedir}/client_key.pem
+     install -m 0644 ${S}/examples/spdmlite/certs/ca_key.pem ${D}${sysprivatedir}/ca_key.pem
 
 
      install -d ${D}${systemd_system_unitdir}

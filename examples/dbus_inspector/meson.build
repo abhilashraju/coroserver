@@ -6,6 +6,7 @@ systemd_system_unit_dir = systemd.get_variable('systemdsystemunitdir')
 executable('dbus_inspector',
   'dbus_inspector.cpp',
   dependencies: [reactor_dep,sdbusplus_dep],
+  cpp_args: ['-DBOOST_ASIO_DISABLE_THREADS'],
   install: true,
   install_dir: '/usr/bin'
 )

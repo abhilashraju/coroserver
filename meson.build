@@ -37,9 +37,10 @@ reactor_dep = declare_dependency(
 )
 cxx = meson.get_compiler('cpp')
 # Add dependencies
-add_project_arguments(
-    cxx.get_supported_arguments(['-DBOOST_ASIO_DISABLE_THREADS']),language: 'cpp')
+#add_project_arguments(
+    #cxx.get_supported_arguments(['-DBOOST_ASIO_DISABLE_THREADS']),language: 'cpp')
 subdir('examples')
+
 
 # Install headers
 #install_headers('include', subdir: 'reactor')
@@ -54,3 +55,4 @@ pkgconfig.generate(
     subdirs: 'include',
     filebase: 'reactor'
 )
+

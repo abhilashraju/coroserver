@@ -5,6 +5,7 @@ libarchive_dep = dependency('libarchive')
 executable('event_broker',
   'event_broker.cpp',
   dependencies: [reactor_dep,sdbusplus_dep,libarchive_dep],
+  cpp_args: ['-DBOOST_ASIO_DISABLE_THREADS'],
   include_directories: include_dirs,
   install: true,
   install_dir: '/usr/bin'

@@ -141,7 +141,7 @@ int main(int argc, const char* argv[])
         });
         LOG_DEBUG("Getting dbus connectionb{}", PicController::busName);
 
-        // conn->request_name(PicController::busName);
+        conn->request_name(PicController::busName);
         io_context.run();
     }
     catch (const std::exception& e)

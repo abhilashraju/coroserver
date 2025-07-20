@@ -12,6 +12,7 @@ subdir('journalserver')
 
 subdir('redfish_client')
 subdir('redfish_listener')
+subdir('workers')
 sdbusplus_dep = dependency('sdbusplus', required: false, include_type: 'system')
 systemd = dependency('systemd',required: false)
 if sdbusplus_dep.found() and systemd.found()

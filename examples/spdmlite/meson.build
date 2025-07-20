@@ -4,6 +4,7 @@
 executable('spdmlite',
   'spdmlite.cpp',
   dependencies: [reactor_dep,sdbusplus_dep],
+  cpp_args: ['-DBOOST_ASIO_DISABLE_THREADS'],
   install: true,
   install_dir: '/usr/bin'
 )
@@ -27,7 +28,7 @@ install_data(
 install_data(
     'certs/client_cert.pem',
     'certs/server_cert.pem',
-    'certs/public.pem',
+    'certs/ca.pem',
     install_dir: '/etc/ssl/certs/https',
 )
 install_data(
