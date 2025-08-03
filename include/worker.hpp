@@ -70,7 +70,7 @@ struct WorkerPool
 };
 inline WorkerPool& getWorkerPool()
 {
-    static WorkerPool pool(std::thread::hardware_concurrency());
+    static WorkerPool pool(1);
     return pool;
 }
 template <typename RetType>
