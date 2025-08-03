@@ -1,4 +1,4 @@
-project('reactor', 'cpp', version: '1.0.0', default_options: ['cpp_std=c++23','cpp_args=-Wno-subobject-linkage'])
+project('reactor', ['c','cpp'], version: '1.0.0', default_options: ['c_std=c18','cpp_std=c++23','cpp_args=-Wno-subobject-linkage'])
 
 # Find Boost dependency
 #boost_dep = dependency('boost', required: true)
@@ -30,10 +30,10 @@ endif
  #   ])
  ##   boost_url_dep = boost_url_proj.dependency('boost-url')
 #endif
-
+sdeventplus_dep = dependency('sdeventplus')
 reactor_dep = declare_dependency(
     include_directories:['include'],
-    dependencies:[nlohmann_json_dep,openssl_dep,boost_dep,zlib_dep]
+    dependencies:[nlohmann_json_dep,openssl_dep,boost_dep,zlib_dep,sdeventplus_dep]
 )
 cxx = meson.get_compiler('cpp')
 # Add dependencies

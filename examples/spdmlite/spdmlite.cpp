@@ -69,7 +69,7 @@ int main(int argc, const char* argv[])
             json.value("resources", std::vector<std::string>{});
         auto maxConnections = 1;
 
-        reactor::Logger<std::ostream>& logger = reactor::getLogger();
+        auto& logger = reactor::getLogger();
         logger.setLogLevel(reactor::LogLevel::DEBUG);
         net::io_context io_context;
         ssl::context ssl_server_context(ssl::context::sslv23_server);

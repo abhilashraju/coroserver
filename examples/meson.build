@@ -21,4 +21,5 @@ if sdbusplus_dep.found() and systemd.found()
     subdir('data_sync')
     subdir('event_broker')
     subdir('spdmlite')
+    subdir('spdm')
 endif

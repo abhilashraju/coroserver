@@ -111,7 +111,7 @@ int main(int argc, const char* argv[])
         auto maxConnections = json.value("max-connections", 1);
         auto pluginfolder = json.value("plugins-folder", "/usr/bin/plugins");
 
-        reactor::Logger<std::ostream>& logger = reactor::getLogger();
+        auto& logger = reactor::getLogger();
         logger.setLogLevel(reactor::LogLevel::INFO);
         net::io_context io_context;
         auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);

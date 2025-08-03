@@ -34,7 +34,7 @@ std::optional<std::pair<X509Ptr, EVP_PKEYPtr>> createAndSaveEntityCertificate(
     //     return std::nullopt;
     // }
     // X509_add_ext(cert.get(), ext.get(), -1);
-    if (!savePrivateKeyToFile(std::get<1>(entity_data[server]), key))
+    if (!savePrivateKey(std::get<1>(entity_data[server]), key))
     {
         LOG_ERROR("Failed to save private key to {}",
                   std::get<1>(entity_data[server]));
@@ -138,7 +138,7 @@ struct CertificateExchanger
                               nullptr, nullptr, nullptr),
             X509_free);
 
-        if (!saveCertificateToFile(CA_PATH, ca))
+        if (!saveCertificate(CA_PATH, ca))
         {
             LOG_ERROR("Failed to save CA certificate to {}", CA_PATH);
             return false;

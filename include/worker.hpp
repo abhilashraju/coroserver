@@ -73,6 +73,44 @@ inline WorkerPool& getWorkerPool()
     static WorkerPool pool(std::thread::hardware_concurrency());
     return pool;
 }
+template <typename RetType>
+inline AwaitableResult<boost::system::error_code, RetType> asyncCall(
+    net::io_context& ctx, std::function<RetType()>&& task)
+{
+    auto& pool = getWorkerPool();
+    auto h = make_awaitable_handler<RetType>([&](auto promise) {
+        auto promise_ptr =
+            std::make_shared<decltype(promise)>(std::move(promise));
+        pool.addTask([&ctx, promise_ptr, task = std::move(task)]() mutable {
+            try
+            {
+                RetType ret = task();
+                LOG_DEBUG(
+                    "Task completed successfully Posting result to process in io context");
+                ctx.post([promise_ptr, ret = std::move(ret)]() mutable {
+                    LOG_DEBUG("Setting promise values in io context");
+                    (*promise_ptr)
+                        .setValues(boost::system::error_code{}, std::move(ret));
+                });
+            }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR("Exception in task: {}", e.what());
+                LOG_DEBUG("Posting error to process in io context");
+                ctx.post([promise_ptr]() mutable {
+                    (*promise_ptr)
+                        .setValues(
+                            boost::system::error_code{
+                                boost::system::errc::make_error_code(
+                                    boost::system::errc::operation_canceled)},
+                            RetType{});
+                });
+            }
+        });
+    });
+    co_return co_await h();
+}
+
 inline AwaitableResult<boost::system::error_code> asyncCall(
     net::io_context& ctx, std::function<void()>&& task)
 {
@@ -105,5 +143,5 @@ inline AwaitableResult<boost::system::error_code> asyncCall(
             }
         });
     });
-    co_await h();
+    co_return co_await h();
 }

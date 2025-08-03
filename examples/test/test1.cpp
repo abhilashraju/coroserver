@@ -6,7 +6,7 @@
 namespace net = boost::asio;
 int main()
 {
-    reactor::Logger<std::ostream>& logger = reactor::getLogger();
+    auto& logger = reactor::getLogger();
     logger.setLogLevel(reactor::LogLevel::INFO);
     net::io_context io_context;
     FileWatcher watcher(io_context.get_executor());

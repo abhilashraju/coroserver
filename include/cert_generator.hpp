@@ -1,5 +1,4 @@
 #pragma once
-#include "cert_generator.hpp"
 #include "globaldefs.hpp"
 #include "logger.hpp"
 
@@ -17,6 +16,7 @@
 template <typename T, void (*Deleter)(T*)>
 using openssl_ptr = std::unique_ptr<T, decltype(Deleter)>;
 using X509Ptr = openssl_ptr<X509, X509_free>;
+using BIOPtr = openssl_ptr<BIO, BIO_free_all>;
 X509Ptr makeX509Ptr(X509* ptr)
 {
     return X509Ptr(ptr, X509_free);
@@ -26,7 +26,10 @@ EVP_PKEYPtr makeEVPPKeyPtr(EVP_PKEY* ptr)
 {
     return EVP_PKEYPtr(ptr, EVP_PKEY_free);
 }
-
+BIOPtr makeBIOPtr(BIO* ptr)
+{
+    return BIOPtr(ptr, BIO_free_all);
+}
 using EVP_PKEYPtr = openssl_ptr<EVP_PKEY, EVP_PKEY_free>;
 
 inline void printLastError()
@@ -207,21 +210,40 @@ bool loadTpm2(boost::asio::ssl::context& ctx)
     LOG_DEBUG("Loaded certificate and private key from TPM2");
     return true;
 }
-openssl_ptr<EVP_PKEY, EVP_PKEY_free> loadPrivateKey(const std::string& path)
+openssl_ptr<EVP_PKEY, EVP_PKEY_free> loadPrivateKey(const std::string& path,
+                                                    bool pem = true)
 {
     BIO* keybio = BIO_new_file(path.data(), "r");
     if (!keybio)
         return {nullptr, EVP_PKEY_free};
-    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(keybio, nullptr, nullptr, nullptr);
+    EVP_PKEY* pkey{nullptr};
+    if (pem)
+    {
+        pkey = PEM_read_bio_PrivateKey(keybio, nullptr, nullptr, nullptr);
+    }
+    else
+    {
+        pkey = d2i_PrivateKey_bio(keybio, nullptr);
+    }
+
     BIO_free(keybio);
     return openssl_ptr<EVP_PKEY, EVP_PKEY_free>(pkey, EVP_PKEY_free);
 }
-openssl_ptr<X509, X509_free> loadCertificate(const std::string& path)
+openssl_ptr<X509, X509_free> loadCertificate(const std::string& path,
+                                             bool pem = true)
 {
     BIO* certbio = BIO_new_file(path.data(), "r");
     if (!certbio)
         return {nullptr, X509_free};
-    X509* cert = PEM_read_bio_X509(certbio, nullptr, nullptr, nullptr);
+    X509* cert{nullptr};
+    if (pem)
+    {
+        cert = PEM_read_bio_X509(certbio, nullptr, nullptr, nullptr);
+    }
+    else
+    {
+        cert = d2i_X509_bio(certbio, nullptr);
+    }
     BIO_free(certbio);
     return openssl_ptr<X509, X509_free>(cert, X509_free);
 }
@@ -308,8 +330,9 @@ inline openssl_ptr<X509, X509_free> create_certificate(
     // Add keyUsage
     if (is_ca)
     {
-        ext = X509V3_EXT_conf_nid(nullptr, nullptr, NID_key_usage,
-                                  (char*)"keyCertSign, cRLSign");
+        ext = X509V3_EXT_conf_nid(
+            nullptr, nullptr, NID_key_usage,
+            (char*)"keyCertSign, cRLSign, digitalSignature, keyEncipherment");
     }
     else
     {
@@ -466,88 +489,157 @@ bool checkValidity(const openssl_ptr<X509, X509_free>& cert)
 
     return true;
 }
-
-bool saveCertificateToFile(const std::string& path,
-                           const openssl_ptr<X509, X509_free>& cert)
+bool saveBio(const std::string& path, const openssl_ptr<BIO, BIO_free_all>& bio)
+{
+    if (!bio)
+    {
+        LOG_ERROR("BIO pointer is null, cannot save to file {}", path);
+        return false;
+    }
+    std::ofstream file(path);
+    if (!file.is_open())
+    {
+        LOG_ERROR("Failed to open file {} for writing", path);
+        return false;
+    }
+    BUF_MEM* buf;
+    BIO_get_mem_ptr(bio.get(), &buf);
+    file.write(buf->data, buf->length);
+    file.close();
+    LOG_DEBUG("BIO data saved to {}", path);
+    return true;
+}
+openssl_ptr<BIO, BIO_free_all> loadCertificate(
+    const openssl_ptr<X509, X509_free>& cert, bool pem = true)
 {
     if (!checkValidity(cert))
     {
-        LOG_ERROR("Certificate is not valid, cannot save to file {}", path);
-        return false;
+        LOG_ERROR("Certificate is not valid, cannot save to buffer");
+        return makeBIOPtr(nullptr);
     }
-    std::ofstream file(path);
-    if (!file.is_open())
+    auto bio = makeBIOPtr(BIO_new(BIO_s_mem()));
+    if (pem)
     {
-        LOG_ERROR("Failed to open file {} for writing", path);
-        return false;
+        if (!PEM_write_bio_X509(bio.get(), cert.get()))
+        {
+            printLastError();
+            LOG_ERROR("Failed to write certificate to buffer");
+            return makeBIOPtr(nullptr);
+        }
     }
-
-    openssl_ptr<BIO, BIO_free_all> bio(BIO_new(BIO_s_mem()), BIO_free_all);
-    if (!PEM_write_bio_X509(bio.get(), cert.get()))
+    else
     {
-        printLastError();
-        LOG_ERROR("Failed to write certificate to BIO {}", path);
-        return false;
+        if (!i2d_X509_bio(bio.get(), cert.get()))
+        {
+            printLastError();
+            LOG_ERROR("Failed to write certificate to buffer");
+            return makeBIOPtr(nullptr);
+        }
     }
-    BUF_MEM* buf;
-    BIO_get_mem_ptr(bio.get(), &buf);
-    file.write(buf->data, buf->length);
-    if (!file)
+    return bio;
+}
+bool saveCertificate(const std::string& path,
+                     const openssl_ptr<X509, X509_free>& cert, bool pem = true)
+{
+    if (!saveBio(path, loadCertificate(cert, pem)))
     {
-        LOG_ERROR("Failed to write certificate to file {}", path);
+        LOG_ERROR("Failed to save certificate to file {}", path);
         return false;
     }
-    file.close();
     LOG_DEBUG("Certificate saved to {}", path);
     return true;
 }
-bool savePrivateKeyToFile(const std::string& path,
-                          const openssl_ptr<EVP_PKEY, EVP_PKEY_free>& pkey)
+bool saveCertificate(const std::string& path, const std::vector<X509*>& certs,
+                     bool pem = true)
 {
-    std::ofstream file(path);
-    if (!file.is_open())
+    if (certs.empty())
     {
-        LOG_ERROR("Failed to open file {} for writing", path);
+        LOG_ERROR("Certificate chain is empty, nothing to save");
         return false;
     }
     openssl_ptr<BIO, BIO_free_all> bio(BIO_new(BIO_s_mem()), BIO_free_all);
-    if (!PEM_write_bio_PrivateKey(bio.get(), pkey.get(), nullptr, nullptr, 0,
-                                  nullptr, nullptr))
+    for (const auto& cert : certs)
     {
-        LOG_ERROR("Failed to write private key to BIO");
+        if (!cert)
+        {
+            LOG_ERROR("Invalid certificate in chain, skipping");
+            continue;
+        }
+        if (pem)
+        {
+            if (!PEM_write_bio_X509(bio.get(), cert))
+            {
+                LOG_ERROR("Failed to write certificate to BIO");
+                return false;
+            }
+        }
+        else
+        {
+            if (!i2d_X509_bio(bio.get(), cert))
+            {
+                LOG_ERROR("Failed to write certificate to BIO");
+                return false;
+            }
+        }
+    }
+    return saveBio(path, std::move(bio));
+}
+
+openssl_ptr<BIO, BIO_free_all> loadPrivateKey(
+    const openssl_ptr<EVP_PKEY, EVP_PKEY_free>& pkey, bool pem = true)
+{
+    openssl_ptr<BIO, BIO_free_all> bio(BIO_new(BIO_s_mem()), BIO_free_all);
+    if (pem)
+    {
+        if (!PEM_write_bio_PrivateKey(bio.get(), pkey.get(), nullptr, nullptr,
+                                      0, nullptr, nullptr))
+        {
+            LOG_ERROR("Failed to write private key to BIO");
+            return makeBIOPtr(nullptr);
+        }
+    }
+    else
+    {
+        if (!i2d_PrivateKey_bio(bio.get(), pkey.get()))
+        {
+            LOG_ERROR("Failed to write private key to BIO");
+            return makeBIOPtr(nullptr);
+        }
+    }
+    return bio;
+}
+bool savePrivateKey(const std::string& path,
+                    const openssl_ptr<EVP_PKEY, EVP_PKEY_free>& pkey,
+                    bool pem = true)
+{
+    if (!saveBio(path, loadPrivateKey(pkey, pem)))
+    {
+        LOG_ERROR("Failed to save private key to file {}", path);
         return false;
     }
-    BUF_MEM* buf;
-    BIO_get_mem_ptr(bio.get(), &buf);
-    file.write(buf->data, buf->length);
-    if (!file)
-    {
-        LOG_ERROR("Failed to write private key to file {}", path);
-        return false;
-    }
-    file.close();
     LOG_DEBUG("Private key saved to {}", path);
     return true;
 }
-std::string toString(const openssl_ptr<X509, X509_free>& cert)
+std::string toString(const openssl_ptr<X509, X509_free>& cert, bool pem = true)
 {
-    openssl_ptr<BIO, BIO_free_all> bio(BIO_new(BIO_s_mem()), BIO_free_all);
-    if (!PEM_write_bio_X509(bio.get(), cert.get()))
+    auto bio = loadCertificate(cert, pem);
+    if (!bio)
     {
-        LOG_ERROR("Failed to write certificate to BIO");
+        LOG_ERROR("Failed to load certificate into BIO");
         return {};
     }
+
     BUF_MEM* buf;
     BIO_get_mem_ptr(bio.get(), &buf);
     return std::string(buf->data, buf->length);
 }
-std::string toString(const openssl_ptr<EVP_PKEY, EVP_PKEY_free>& pkey)
+std::string toString(const openssl_ptr<EVP_PKEY, EVP_PKEY_free>& pkey,
+                     bool pem = true)
 {
-    openssl_ptr<BIO, BIO_free_all> bio(BIO_new(BIO_s_mem()), BIO_free_all);
-    if (!PEM_write_bio_PrivateKey(bio.get(), pkey.get(), nullptr, nullptr, 0,
-                                  nullptr, nullptr))
+    auto bio = loadPrivateKey(pkey, pem);
+    if (!bio)
     {
-        LOG_ERROR("Failed to write private key to BIO");
+        LOG_ERROR("Failed to load private key into BIO");
         return {};
     }
     BUF_MEM* buf;
