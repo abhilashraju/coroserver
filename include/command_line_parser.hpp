@@ -1,4 +1,5 @@
 #pragma once
+#include "name_space.hpp"
 #include "utilities.hpp"
 
 #include <algorithm>
@@ -42,4 +43,4 @@ inline auto getArgs(const auto& commLine, Args... args)
     };
     return std::make_tuple((extact(args))...);
 }
-}
+} // namespace NSNAME

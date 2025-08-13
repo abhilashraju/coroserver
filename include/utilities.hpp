@@ -1,4 +1,6 @@
 #pragma once
+#include "name_space.hpp"
+
 #include <algorithm>
 #include <ranges>
 #include <string>

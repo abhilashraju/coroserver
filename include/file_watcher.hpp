@@ -1,11 +1,12 @@
 #pragma once
-#include "logger.hpp"
+#include "name_space.hpp"
 
 #include <sys/inotify.h>
 #include <unistd.h>
 
 #include <boost/asio.hpp>
 #include <boost/asio/posix/stream_descriptor.hpp>
+#include <logger.hpp>
 
 #include <coroutine>
 #include <cstring>
@@ -148,4 +149,4 @@ inline boost::asio::awaitable<void> watchFileChanges(FileWatcher& watcher,
 {
     co_await watcher.watchForChanges(handler);
 }
-}
+} // namespace NSNAME

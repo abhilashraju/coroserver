@@ -1,6 +1,8 @@
 #pragma once
 #include <systemd/sd-journal.h>
 
+#include "name_space.hpp"
+
 #include <format>
 #include <iostream>
 #include <source_location>

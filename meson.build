@@ -26,7 +26,7 @@ reactor_dep = declare_dependency(
     dependencies:[nlohmann_json_dep,openssl_dep,boost_dep,zlib_dep,sdeventplus_dep]
 )
 cxx = meson.get_compiler('cpp')
-add_project_arguments('-DNSNAME=reactor', language: 'cpp')
+
 # Add dependencies
 #add_project_arguments(
     #cxx.get_supported_arguments(['-DBOOST_ASIO_DISABLE_THREADS']),language: 'cpp')
@@ -34,7 +34,7 @@ subdir('examples')
 
 
 # Install headers
-install_subdir('include', install_dir: 'include/reactor')
+install_subdir('include', install_dir: 'include/reactor',strip_directory: true)
 
 # Create and install pkg-config file
 pkgconfig = import('pkgconfig')
