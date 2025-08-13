@@ -1,10 +1,5 @@
 #pragma once
 #include "beastdefs.hpp"
-inline net::use_awaitable_t<>& mut_awaitable()
-{
-    static net::use_awaitable_t<> myawitable;
-    return myawitable;
-}
 
 template <typename... Types>
 using PrependEC = std::tuple<boost::system::error_code, Types...>;

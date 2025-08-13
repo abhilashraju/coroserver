@@ -11,6 +11,9 @@ DEPENDS = " \
     nlohmann-json \
     openssl \
     libarchive \
+    libpam \
+    systemd \
+    sdeventplus \
     sdbusplus \
 "
 
@@ -50,6 +53,8 @@ do_install() {
      install -m 0755 ${B}/examples/spdmlite/spdmlite ${D}${bindir}/spdmlite
      install -m 0755 ${B}/examples/redfish_client/redfish_client ${D}${bindir}/redfish_client
      install -m 0755 ${B}/examples/redfish_listener/redfish_listener ${D}${bindir}/redfish_listener
+     install -m 0755 ${B}/examples/mctp_requester/mctp_requester ${D}${bindir}/mctp_requester
+     install -m 0755 ${B}/examples/mctp_responder/mctp_responder ${D}${bindir}/mctp_responder
 
      install -d ${D}${syscadir}
      install -d ${D}${syscertdir}
@@ -78,10 +83,9 @@ FILES:${PN} += "/usr/bin/event_broker"
 FILES:${PN} += "/usr/bin/redfish_client"
 FILES:${PN} += "/usr/bin/spdmlite"
 FILES:${PN} += "/usr/bin/event_publisher"
-FILES:${PN} += "/etc/systemd"
-FILES:${PN} += "/etc/systemd/system"
+FILES:${PN} += "/usr/bin/mctp_requester"
+FILES:${PN} += "/usr/bin/mctp_responder"
 FILES:${PN} += "/etc/systemd/system/xyz.openbmc_project.spdmlite.service"
-FILES:${PN} += "/var/spdm"
 FILES:${PN} += "/var/spdm/spdm.conf"
-FILES:${PN} += "/etc/dbus-1/system.d"
 FILES:${PN} += "/etc/dbus-1/system.d/xyz.openbmc_project.spdmlite.conf"
+

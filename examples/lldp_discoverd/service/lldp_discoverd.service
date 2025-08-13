@@ -1,0 +1,9 @@
+[Unit]
+Description=lldp discoverd service
+
+[Service]
+ExecStart=/usr/bin/lldp_discoverd
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
