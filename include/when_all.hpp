@@ -1,5 +1,7 @@
 #pragma once
 #include "beastdefs.hpp"
+namespace NSNAME
+{
 template <typename Tuple, std::size_t Index = 0>
 void set_value(Tuple& tuple, auto v, std::size_t index)
 {
@@ -104,3 +106,4 @@ net::awaitable<
     }
     co_return results;
 }
+} // namespace NSNAME

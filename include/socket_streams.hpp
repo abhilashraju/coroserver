@@ -8,7 +8,8 @@
 #include <boost/asio/streambuf.hpp>
 
 using namespace std::chrono_literals;
-
+namespace NSNAME
+{
 struct TcpStreamType
 {
     using stream_type = boost::asio::ssl::stream<tcp::socket>;
@@ -200,3 +201,4 @@ struct TimedStreamer
     std::shared_ptr<StreamType> socket;
     std::shared_ptr<net::steady_timer> timer;
 };
+}

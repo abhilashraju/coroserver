@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <unordered_set>
+using namespace NSNAME;
 // Forward declaration
 class HttpSubscription;
 

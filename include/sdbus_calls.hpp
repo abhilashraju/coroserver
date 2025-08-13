@@ -9,7 +9,8 @@
 #include <sdbusplus/exception.hpp>
 #include <sdbusplus/server.hpp>
 #include <sdbusplus/timer.hpp>
-
+namespace NSNAME
+{
 template <typename... RetTypes, typename... InputArgs>
 inline auto awaitable_dbus_method_call(
     sdbusplus::asio::connection& conn, const std::string& service,
@@ -302,4 +303,5 @@ inline AwaitableResult<std::string> introspect(
             service, path, "org.freedesktop.DBus.Introspectable", "Introspect");
     });
     co_return co_await h();
+}
 }

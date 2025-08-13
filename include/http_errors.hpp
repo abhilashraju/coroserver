@@ -6,6 +6,8 @@
 #include <exception>
 #include <stdexcept>
 #include <type_traits>
+namespace NSNAME
+{
 struct file_not_found : std::runtime_error
 {
     file_not_found(const std::string& error) :
@@ -66,9 +68,9 @@ concept ConvertibleToStringView =
     };
 
 template <ConvertibleToStringView T>
-inline Response
-    make_success_response(T data, http::status st, int version,
-                          std::string_view content_type = "plain/text")
+inline Response make_success_response(
+    T data, http::status st, int version,
+    std::string_view content_type = "plain/text")
 {
     Response res{st, version};
     res.set(http::field::content_type, content_type);
@@ -85,3 +87,4 @@ inline Response make_success_response(const T& js, http::status st, int version)
 {
     return make_success_response(js.dump(2), st, version, "application/json");
 }
+} // namespace NSNAME

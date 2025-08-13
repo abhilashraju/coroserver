@@ -1,7 +1,8 @@
 #pragma once
 #include "beastdefs.hpp"
 #include "tcp_client.hpp"
-
+namespace NSNAME
+{
 template <typename Stream>
 class HttpClient
 {
@@ -94,3 +95,4 @@ class HttpClient
     net::io_context& ioc;
     ssl::stream<Stream> stream_;
 };
+} // namespace NSNAME

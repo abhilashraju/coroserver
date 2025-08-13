@@ -5,7 +5,8 @@
 #include <numeric>
 #include <string>
 #include <vector>
-
+namespace NSNAME
+{
 struct http_function
 {
     struct parameter
@@ -99,4 +100,5 @@ void extract_params_from_path(http_function& func,
 
                        return http_function::parameter{s1, ""};
                    });
+}
 }

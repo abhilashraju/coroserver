@@ -9,7 +9,7 @@
 #undef LOG_ERROR
 #undef LOG_DEBUG
 #undef LOG_INFO
-namespace reactor
+namespace NSNAME
 {
 enum class LogLevel
 {
@@ -114,24 +114,24 @@ inline Logger<Lg2Logger>& getLogger()
     static Logger<Lg2Logger> logger(LogLevel::ERROR, lg2Logger);
     return logger;
 }
-} // namespace reactor
+} // namespace NSNAME
 
 // Macros for clients to use logger
 #define LOG_DEBUG(message, ...)                                                \
-    reactor::getLogger().log(                                                  \
-        std::source_location::current(), reactor::LogLevel::DEBUG,             \
+    NSNAME::getLogger().log(                                                   \
+        std::source_location::current(), NSNAME::LogLevel::DEBUG,              \
         std::format("{} :" message, "Debug", ##__VA_ARGS__))
 #define LOG_INFO(message, ...)                                                 \
-    reactor::getLogger().log(                                                  \
-        std::source_location::current(), reactor::LogLevel::INFO,              \
+    NSNAME::getLogger().log(                                                   \
+        std::source_location::current(), NSNAME::LogLevel::INFO,               \
         std::format("{} :" message, "Info", ##__VA_ARGS__))
 #define LOG_WARNING(message, ...)                                              \
-    reactor::getLogger().log(                                                  \
-        std::source_location::current(), reactor::LogLevel::WARNING,           \
+    NSNAME::getLogger().log(                                                   \
+        std::source_location::current(), NSNAME::LogLevel::WARNING,            \
         std::format("{} :" message, "Warning", ##__VA_ARGS__))
 #define LOG_ERROR(message, ...)                                                \
-    reactor::getLogger().log(                                                  \
-        std::source_location::current(), reactor::LogLevel::ERROR,             \
+    NSNAME::getLogger().log(                                                   \
+        std::source_location::current(), NSNAME::LogLevel::ERROR,              \
         std::format("{} :" message, "Error", ##__VA_ARGS__))
 
 #define CLIENT_LOG_DEBUG(message, ...) LOG_DEBUG(message, ##__VA_ARGS__)

@@ -11,6 +11,8 @@
 #include <iostream>
 #include <string>
 #include <utility>
+namespace NSNAME
+{
 namespace net = boost::asio;
 namespace ssl = boost::asio::ssl;
 using tcp = boost::asio::ip::tcp;
@@ -118,3 +120,4 @@ class TcpClient
     std::shared_ptr<ssl::stream<tcp::socket>> stream_;
     std::shared_ptr<net::steady_timer> timer_;
 };
+} // namespace NSNAME

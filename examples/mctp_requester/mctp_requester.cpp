@@ -1,6 +1,7 @@
 #include "mctp_requester.hpp"
 
 #include "logger.hpp"
+using namespace NSNAME;
 net::awaitable<void> makeRequest(boost::asio::io_context& ctx)
 {
     // Create an instance of MCTPRequester

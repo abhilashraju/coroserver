@@ -3,6 +3,7 @@
 #include "eventmethods.hpp"
 #include "eventqueue.hpp"
 #include "globaldefs.hpp"
+using namespace NSNAME;
 constexpr auto INSTALL_CERTIFICATES = "InstallCertificates";
 constexpr auto INSTALL_CERTIFICATES_RESP = "InstallCertificatesResp";
 std::optional<std::pair<X509Ptr, EVP_PKEYPtr>> createAndSaveEntityCertificate(

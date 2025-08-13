@@ -1,6 +1,7 @@
 #pragma once
 #include "beastdefs.hpp"
-
+namespace NSNAME
+{
 template <typename... Types>
 using PrependEC = std::tuple<boost::system::error_code, Types...>;
 template <typename... RetTypes>
@@ -47,4 +48,5 @@ auto make_awaitable_handler(HanlderFunc&& h)
             },
             net::use_awaitable);
     };
+}
 }

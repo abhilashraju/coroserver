@@ -4,6 +4,7 @@
 
 #include "command_line_parser.hpp"
 #include "logger.hpp"
+using namespace NSNAME;
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 int main(int argc, const char* argv[])
 {

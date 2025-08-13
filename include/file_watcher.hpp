@@ -13,6 +13,8 @@
 #include <iostream>
 #include <map>
 #include <stdexcept>
+namespace NSNAME
+{
 struct FileWatcher
 {
     enum class FileStatus
@@ -145,4 +147,5 @@ inline boost::asio::awaitable<void> watchFileChanges(FileWatcher& watcher,
                                                      Handler& handler)
 {
     co_await watcher.watchForChanges(handler);
+}
 }

@@ -2,6 +2,8 @@
 #include "beastdefs.hpp"
 
 #include <linux/mctp.h>
+namespace NSNAME
+{
 namespace net = boost::asio;
 constexpr uint8_t messageType = 0x7E;
 struct MCTPRequester
@@ -46,3 +48,4 @@ struct MCTPRequester
         co_return ec;
     }
 };
+}

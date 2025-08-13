@@ -5,6 +5,7 @@
 #include "utilities.hpp"
 
 #include <nlohmann/json.hpp>
+using namespace NSNAME;
 int main(int argc, const char* argv[])
 {
     auto [id, data, conf] = getArgs(parseCommandline(argc, argv), "--id,-i",

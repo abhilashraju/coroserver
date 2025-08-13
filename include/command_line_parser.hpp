@@ -4,7 +4,8 @@
 #include <algorithm>
 #include <map>
 #include <string>
-
+namespace NSNAME
+{
 inline auto parseCommandline(int argc, const char* argv[])
 {
     int i = 1;
@@ -40,4 +41,5 @@ inline auto getArgs(const auto& commLine, Args... args)
         return std::optional<std::string_view>{};
     };
     return std::make_tuple((extact(args))...);
+}
 }

@@ -10,6 +10,7 @@
 #include <ranges>
 #include <regex>
 #include <vector>
+using namespace NSNAME;
 using namespace boost::asio::experimental::awaitable_operators;
 std::vector<std::string> extract_links(const std::string& html)
 {

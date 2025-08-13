@@ -2,6 +2,7 @@
 #include "mctp_responder.hpp"
 
 #include "logger.hpp"
+using namespace NSNAME;
 net::awaitable<void> makeResponder(boost::asio::io_context& ctx,
                                    uint8_t localEid)
 {

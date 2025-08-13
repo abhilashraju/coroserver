@@ -11,6 +11,8 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+namespace NSNAME
+{
 namespace lg2
 {
 template <typename... Args>
@@ -127,4 +129,5 @@ std::string createSecretKey(std::string userName)
         return "";
     }
     return secret;
+}
 }

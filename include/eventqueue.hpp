@@ -6,6 +6,8 @@
 #include "utilities.hpp"
 
 #include <map>
+namespace NSNAME
+{
 static constexpr auto EVENTQUEFILE = "/var/lib/coroserver/eventqueue2.dat";
 static constexpr auto TIMETOLIVE = 60;
 namespace fs = std::filesystem;
@@ -328,3 +330,4 @@ struct EventQueue
     JsonSerializer serializer;
     uint64_t lastBarrierTime{0};
 };
+}

@@ -1,4 +1,5 @@
 #include "event_broker_plugin.hpp"
+using namespace NSNAME;
 class MyBrokerPlugin : public virtual EventBrokerPlugin
 {
   public:
@@ -30,8 +31,8 @@ class MyBrokerPlugin : public virtual EventBrokerPlugin
     {
         return interfaceId == EventBrokerPlugin::iid();
     }
-    std::shared_ptr<PluginIface>
-        getInterface(const std::string& interfaceId) override
+    std::shared_ptr<PluginIface> getInterface(
+        const std::string& interfaceId) override
     {
         if (interfaceId == EventBrokerPlugin::iid())
         {

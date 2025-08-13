@@ -3,7 +3,7 @@
 #include "command_line_parser.hpp"
 #include "logger.hpp"
 #include "taskqueue.hpp"
-
+using namespace NSNAME;
 int main(int argc, const char* argv[])
 {
     net::io_context io_context;

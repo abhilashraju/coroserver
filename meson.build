@@ -20,22 +20,13 @@ if not nlohmann_json_dep.found()
     nlohmann_json_dep = nlohmann_json_proj.get_variable('nlohmann_json_dep')
 endif
 
-#boost_url_dep = dependency('boost-url', required: false)
-#boost_url_dep = dependency('boost-url', required: false)
-#if not boost_url_dep.found()
- #   cmake = import('cmake')
- #  boost_url_proj = cmake.subproject('boost-url', cmake_options: [
- #       '-DBUILD_SHARED_LIBS=OFF',
- #       '-DBOOST_URL_BUILD_EXAMPLES=OFF'
- #   ])
- ##   boost_url_dep = boost_url_proj.dependency('boost-url')
-#endif
 sdeventplus_dep = dependency('sdeventplus')
 reactor_dep = declare_dependency(
     include_directories:['include'],
     dependencies:[nlohmann_json_dep,openssl_dep,boost_dep,zlib_dep,sdeventplus_dep]
 )
 cxx = meson.get_compiler('cpp')
+add_project_arguments('-DNSNAME=reactor', language: 'cpp')
 # Add dependencies
 #add_project_arguments(
     #cxx.get_supported_arguments(['-DBOOST_ASIO_DISABLE_THREADS']),language: 'cpp')
@@ -43,7 +34,7 @@ subdir('examples')
 
 
 # Install headers
-#install_headers('include', subdir: 'reactor')
+install_subdir('include', install_dir: 'include/reactor')
 
 # Create and install pkg-config file
 pkgconfig = import('pkgconfig')
@@ -52,7 +43,7 @@ pkgconfig.generate(
     description: 'Reactor project',
     version: '1.0.0',
     libraries: reactor_dep,
-    subdirs: 'include',
+    subdirs: 'reactor',
     filebase: 'reactor'
 )
 

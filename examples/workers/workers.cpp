@@ -4,6 +4,7 @@
 #include "worker.hpp"
 
 #include <vector>
+using namespace NSNAME;
 struct MyStruct
 {
     int value;

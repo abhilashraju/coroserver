@@ -5,6 +5,8 @@
 
 #include <filesystem>
 #include <fstream>
+namespace NSNAME
+{
 static constexpr auto DONE = "Done";
 static constexpr auto HEDER_DELIM = "\r\n\r\n";
 static constexpr auto BUFFER_SIZE = 8192;
@@ -118,4 +120,5 @@ AwaitableResult<std::string> readDone(Streamer streamer)
     data.erase(data.length() - delimLength, delimLength);
     LOG_INFO("{} Recieved Header: {}", currentTime(), data);
     co_return std::make_pair(ec, data);
+}
 }

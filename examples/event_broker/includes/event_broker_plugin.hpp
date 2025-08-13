@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <string>
+using namespace NSNAME;
 #define PLUGIN_SYMBOL_EXPORT extern "C" __attribute__((visibility("default")))
 
 class PluginIface : public std::enable_shared_from_this<PluginIface>
@@ -11,8 +12,8 @@ class PluginIface : public std::enable_shared_from_this<PluginIface>
   public:
     virtual ~PluginIface() = 0; // Virtual destructor
     virtual bool hasInterface(const std::string& interfaceId) = 0;
-    virtual std::shared_ptr<PluginIface>
-        getInterface(const std::string& interfaceId) = 0;
+    virtual std::shared_ptr<PluginIface> getInterface(
+        const std::string& interfaceId) = 0;
     static const char* iid()
     {
         return "iid_PluginIface";
@@ -29,8 +30,8 @@ class PluginIface : public std::enable_shared_from_this<PluginIface>
     }
 };
 inline PluginIface::~PluginIface() = default;
-inline std::shared_ptr<PluginIface>
-    PluginIface::getInterface(const std::string& interfaceId)
+inline std::shared_ptr<PluginIface> PluginIface::getInterface(
+    const std::string& interfaceId)
 {
     if (interfaceId == iid())
     {

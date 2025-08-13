@@ -6,7 +6,8 @@
 
 #include <span>
 #include <vector>
-
+namespace NSNAME
+{
 namespace net = boost::asio;
 
 constexpr uint8_t messageType = 0x7E;
@@ -69,3 +70,4 @@ struct MCTPResponder
         co_return ec;
     }
 };
+}

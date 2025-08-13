@@ -5,6 +5,8 @@
 #include <nlohmann/json.hpp>
 
 #include <map>
+namespace NSNAME
+{
 template <typename T>
 concept WebClientThenFunction =
     requires(T t, Response response) {
@@ -324,3 +326,4 @@ struct WebClient
         return *this;
     };
 };
+}

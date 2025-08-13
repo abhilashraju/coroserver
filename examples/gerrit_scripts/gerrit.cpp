@@ -12,6 +12,7 @@
 #include <ranges>
 #include <regex>
 #include <vector>
+using namespace NSNAME;
 using namespace boost::asio::experimental::awaitable_operators;
 auto getQuestionMessage(const nlohmann::json& comments,
                         const std::string& inreplyto)

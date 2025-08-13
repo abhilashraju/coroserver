@@ -7,7 +7,8 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-
+namespace NSNAME
+{
 namespace fs = std::filesystem;
 
 inline bool createTarArchive(const std::string& directoryPath,
@@ -150,3 +151,4 @@ inline bool extractTarArchive(const std::string& tarFilePath,
 
     return true;
 }
+} // namespace NSNAME

@@ -1,5 +1,6 @@
 #pragma once
 #include "cert_generator.hpp"
+using namespace NSNAME;
 using EVP_MD_CTX_Ptr = openssl_ptr<EVP_MD_CTX, EVP_MD_CTX_free>;
 inline EVP_MD_CTX_Ptr makeEVPMDCTXPtr(EVP_MD_CTX* ptr)
 {

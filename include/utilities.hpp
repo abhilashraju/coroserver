@@ -3,7 +3,7 @@
 #include <ranges>
 #include <string>
 #include <vector>
-namespace
+namespace NSNAME
 {
 inline std::string toString(std::string_view vw)
 {
@@ -36,4 +36,4 @@ inline void replaced(const std::string& input, char c, char r, auto outiter)
                    [c, r](char ch) { return ch == c ? r : ch; });
 }
 
-} // namespace
+} // namespace NSNAME

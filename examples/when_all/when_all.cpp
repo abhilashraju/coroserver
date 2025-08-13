@@ -2,6 +2,7 @@
 
 #include "logger.hpp"
 #include "webclient.hpp"
+using namespace NSNAME;
 net::awaitable<void> getAll(net::io_context& ioc, auto... tasks)
 {
     auto [res1, res2] = co_await when_all(ioc, std::move(tasks)...);

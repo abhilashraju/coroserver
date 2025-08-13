@@ -2,6 +2,8 @@
 #include "tcp_client.hpp"
 
 #include <deque>
+namespace NSNAME
+{
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 class TaskQueue
 {
@@ -266,3 +268,4 @@ class TaskQueue
     size_t maxClients{1};
     bool started{false};
 };
+}

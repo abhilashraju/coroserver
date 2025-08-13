@@ -6,6 +6,7 @@
 #include "utilities.hpp"
 
 #include <ranges>
+using namespace NSNAME;
 struct DbusSync
 {
     DbusSync(sdbusplus::asio::connection& conn, EventQueue& eventQueue,
@@ -61,8 +62,8 @@ struct DbusSync
         };
         matches.emplace_back(conn, matchRule.c_str(), std::move(propcallback));
     }
-    net::awaitable<boost::system::error_code>
-        dbusConsumer(Streamer stream, const std::string& event)
+    net::awaitable<boost::system::error_code> dbusConsumer(
+        Streamer stream, const std::string& event)
     {
         LOG_DEBUG("Received event: {}", event);
         auto datas = split(event, ':', 1);

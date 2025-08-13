@@ -7,6 +7,7 @@
 #include <openssl/sha.h>
 
 #include <ranges>
+using namespace NSNAME;
 static constexpr auto SPDM_START = "SPDM_START_REQUEST";
 static constexpr auto MEASUREMENT_REQ_EVENT = "MEASUREMENT_REQ_EVENT";
 static constexpr auto MEASUREMENT_RES_EVENT = "MEASUREMENT_RES_EVENT";

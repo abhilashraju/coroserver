@@ -7,6 +7,8 @@
 #include "socket_streams.hpp"
 
 #include <concepts>
+namespace NSNAME
+{
 template <typename T>
 concept AwaitableResponseHandler =
     requires(T t, Request& req, const http_function& params) {
@@ -239,3 +241,4 @@ class HttpServer
     Accepter& acceptor_;
     HttpRouter& router_;
 };
+}

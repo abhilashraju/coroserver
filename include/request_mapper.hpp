@@ -2,7 +2,8 @@
 #include "beastdefs.hpp"
 
 #include <string>
-
+namespace NSNAME
+{
 struct request_mapper
 {
     std::string path;
@@ -40,3 +41,4 @@ struct request_mapper
         return first.path < second.path;
     }
 };
+}

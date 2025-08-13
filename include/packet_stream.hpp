@@ -2,6 +2,8 @@
 #include "beastdefs.hpp"
 #include "logger.hpp"
 #include "make_awaitable.hpp"
+namespace NSNAME
+{
 struct PacketStreamType
 {
     using stream_type = boost::asio::generic::datagram_protocol::socket;
@@ -35,3 +37,4 @@ struct PacketStreamType
         co_return ec;
     }
 };
+}

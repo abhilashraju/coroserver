@@ -4,6 +4,7 @@
 
 #include <format>
 #include <optional>
+using namespace NSNAME;
 constexpr auto CLIENT_PKEY_NAME = "client_key.{}";
 constexpr auto ENTITY_CLIENT_CERT_NAME = "client_cert.{}";
 constexpr auto SERVER_PKEY_NAME = "server_key.{}";

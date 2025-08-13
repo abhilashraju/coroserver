@@ -12,6 +12,8 @@
 #include <fstream>
 #include <memory>
 #include <string>
+namespace NSNAME
+{
 // Helper for unique_ptr with OpenSSL types
 template <typename T, void (*Deleter)(T*)>
 using openssl_ptr = std::unique_ptr<T, decltype(Deleter)>;
@@ -685,4 +687,5 @@ std::string getPublicKeyStringFromCert(X509Ptr signcert)
     BUF_MEM* buf;
     BIO_get_mem_ptr(bio.get(), &buf);
     return std::string(buf->data, buf->length);
+}
 }

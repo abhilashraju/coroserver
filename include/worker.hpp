@@ -7,6 +7,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+namespace NSNAME
+{
 struct WorkerPool
 {
     std::deque<std::function<void()>> task_queue;
@@ -144,4 +146,5 @@ inline AwaitableResult<boost::system::error_code> asyncCall(
         });
     });
     co_return co_await h();
+}
 }

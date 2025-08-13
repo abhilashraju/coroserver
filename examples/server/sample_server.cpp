@@ -11,6 +11,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+using namespace NSNAME;
 int main(int argc, const char* argv[])
 {
     try

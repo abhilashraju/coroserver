@@ -1,7 +1,8 @@
 #pragma once
 #include <algorithm>
 #include <vector>
-
+namespace NSNAME
+{
 template <typename Key, typename Value>
 struct flat_map
 {
@@ -48,3 +49,4 @@ struct flat_map
         }
     }
 };
+}

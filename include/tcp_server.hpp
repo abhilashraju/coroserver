@@ -5,7 +5,8 @@
 #include <concepts>
 #include <string>
 #include <string_view>
-
+namespace NSNAME
+{
 template <typename Accepter, typename Router>
 class TcpServer
 {
@@ -68,3 +69,4 @@ class TcpServer
     Accepter& acceptor;
     Router& router;
 };
+}

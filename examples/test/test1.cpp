@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 namespace net = boost::asio;
+using namespace NSNAME;
 int main()
 {
     auto& logger = reactor::getLogger();

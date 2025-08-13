@@ -4,6 +4,7 @@
 #include "tcp_client.hpp"
 #include "tcp_server.hpp"
 #include "utilities.hpp"
+using namespace NSNAME;
 using Streamer = TimedStreamer<ssl::stream<tcp::socket>>;
 using COMMAND_HANDLER =
     std::function<net::awaitable<void>(const std::string&, Streamer)>;
@@ -28,8 +29,8 @@ inline AwaitableResult<std::string> readHeader(Streamer streamer)
     data.erase(data.length() - 2, 2);
     co_return std::make_pair(ec, data);
 }
-inline net::awaitable<boost::system::error_code>
-    parseAndHandle(std::string_view header, Streamer streamer)
+inline net::awaitable<boost::system::error_code> parseAndHandle(
+    std::string_view header, Streamer streamer)
 {
     auto command = header | stringSplitter(':');
     std::vector<std::string> command_vec(command.begin(), command.end());
@@ -58,8 +59,8 @@ inline net::awaitable<boost::system::error_code> next(Streamer streamer)
     co_await parseAndHandle(data, streamer);
     co_return boost::system::error_code{};
 }
-inline net::awaitable<void>
-    handleFileModified(const std::string& path, Streamer streamer)
+inline net::awaitable<void> handleFileModified(const std::string& path,
+                                               Streamer streamer)
 {
     std::string header = std::format("FileModified:{}\r\n", path);
     co_await streamer.write(net::buffer(header));

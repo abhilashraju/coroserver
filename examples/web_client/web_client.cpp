@@ -3,7 +3,7 @@
 #include "command_line_parser.hpp"
 #include "logger.hpp"
 #include "webclient.hpp"
-
+using namespace NSNAME;
 net::awaitable<void> run_tcp_client(net::io_context& ioc, std::string_view ep,
                                     std::string_view port)
 {

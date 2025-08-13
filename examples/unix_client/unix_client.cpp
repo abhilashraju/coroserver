@@ -4,7 +4,7 @@
 #include "webclient.hpp"
 
 #include <vector>
-
+using namespace NSNAME;
 net::awaitable<void> run_unix_client(
     net::io_context& ioc, std::string_view name, std::string_view target)
 {

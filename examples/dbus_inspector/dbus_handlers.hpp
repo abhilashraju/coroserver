@@ -2,6 +2,7 @@
 #include "dbus_types.hpp"
 #include "http_server.hpp"
 #include "logger.hpp"
+using namespace NSNAME;
 struct DbusHandlers
 {
     using SubScriberMap = std::map<std::string, sdbusplus::bus::match::match>;

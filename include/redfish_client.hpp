@@ -1,7 +1,7 @@
 #pragma once
 #include "logger.hpp"
 #include "webclient.hpp"
-namespace reactor
+namespace NSNAME
 {
 static const std::map<boost::beast::http::status, const char*>
     http_error_to_string{
@@ -162,4 +162,4 @@ struct RedfishClient
         }
     }
 };
-} // namespace reactor
+} // namespace NSNAME

@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <fstream>
+using namespace NSNAME;
 namespace fs = std::filesystem;
 net::awaitable<void> fileDownloadHandler(const std::string& path,
                                          Streamer streamer)

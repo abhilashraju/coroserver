@@ -4,6 +4,7 @@
 #include "webclient.hpp"
 
 #include <vector>
+using namespace NSNAME;
 struct Person
 {
     std::string name;

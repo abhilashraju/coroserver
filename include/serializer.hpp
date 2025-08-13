@@ -11,7 +11,8 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
-
+namespace NSNAME
+{
 class JsonSerializer
 {
   public:
@@ -122,3 +123,4 @@ class JsonSerializer
     const std::string serPath;
     nlohmann::json jsonData;
 };
+}

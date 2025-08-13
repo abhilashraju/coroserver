@@ -10,7 +10,8 @@
 
 #include <iostream>
 #include <string>
-
+namespace NSNAME
+{
 class AsyncFileWriter
 {
   public:
@@ -33,8 +34,8 @@ class AsyncFileWriter
     }
 
   private:
-    net::awaitable<boost::system::error_code>
-        async_write_some(net::const_buffer data)
+    net::awaitable<boost::system::error_code> async_write_some(
+        net::const_buffer data)
     {
         // Write data asynchronously
         boost::system::error_code ec;
@@ -66,8 +67,8 @@ class AsyncFileReader
         }
     }
 
-    net::awaitable<std::pair<boost::system::error_code, std::size_t>>
-        read(net::mutable_buffer buffer)
+    net::awaitable<std::pair<boost::system::error_code, std::size_t>> read(
+        net::mutable_buffer buffer)
     {
         // Start an asynchronous read operation
         co_return co_await async_read_some(buffer);
@@ -93,3 +94,4 @@ class AsyncFileReader
     net::posix::stream_descriptor stream_;
     int fd_{-1};
 };
+} // namespace NSNAME

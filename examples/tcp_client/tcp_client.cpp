@@ -4,7 +4,7 @@
 
 #include "command_line_parser.hpp"
 #include "logger.hpp"
-
+using namespace NSNAME;
 int main(int argc, const char* argv[])
 {
     auto [ip, port, data] =
