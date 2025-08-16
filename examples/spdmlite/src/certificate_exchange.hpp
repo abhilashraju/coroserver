@@ -19,10 +19,12 @@ std::optional<std::pair<X509Ptr, EVP_PKEYPtr>> createAndSaveEntityCertificate(
         LOG_ERROR("Failed to create entity certificate");
         return std::nullopt;
     }
-    using ENTITY_DATA = std::tuple<const char*, const char*, const char*>;
+    using ENTITY_DATA = std::tuple<const char*, std::string, std::string>;
     std::array<ENTITY_DATA, 2> entity_data = {
-        ENTITY_DATA{"clientAuth", CLIENT_PKEY_PATH, ENTITY_CLIENT_CERT_PATH},
-        ENTITY_DATA{"serverAuth", SERVER_PKEY_PATH, ENTITY_SERVER_CERT_PATH}};
+        ENTITY_DATA{"clientAuth", CLIENT_PKEY_PATH(),
+                    ENTITY_CLIENT_CERT_PATH()},
+        ENTITY_DATA{"serverAuth", SERVER_PKEY_PATH(),
+                    ENTITY_SERVER_CERT_PATH()}};
 
     // Add serverAuth extended key usage
     // openssl_ptr<X509_EXTENSION, X509_EXTENSION_free> ext(
@@ -46,7 +48,7 @@ std::optional<std::pair<X509Ptr, EVP_PKEYPtr>> createAndSaveEntityCertificate(
     cert_chain.emplace_back(ca.get());
 
     // Save the combined certificate chain to a new file
-    FILE* output_file = fopen(std::get<2>(entity_data[server]), "w");
+    FILE* output_file = fopen(std::get<2>(entity_data[server]).data(), "w");
     for (auto cert : cert_chain)
     {
         PEM_write_X509(output_file, cert);
@@ -139,12 +141,12 @@ struct CertificateExchanger
                               nullptr, nullptr, nullptr),
             X509_free);
 
-        if (!saveCertificate(CA_PATH, ca))
+        if (!saveCertificate(CA_PATH(), ca))
         {
-            LOG_ERROR("Failed to save CA certificate to {}", CA_PATH);
+            LOG_ERROR("Failed to save CA certificate to {}", CA_PATH());
             return false;
         }
-        LOG_DEBUG("CA Certificates written to {} ", CA_PATH);
+        LOG_DEBUG("CA Certificates written to {} ", CA_PATH());
         return true;
     }
     net::awaitable<bool> sendCertificate(Streamer streamer)

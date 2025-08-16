@@ -5,9 +5,9 @@
 #include "eventmethods.hpp"
 #include "eventqueue.hpp"
 #include "logger.hpp"
-#include "pic_controller.hpp"
 #include "sdbus_calls.hpp"
 #include "spdm_handshake.hpp"
+#include "spdmdeviceiface.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -37,6 +37,22 @@ net::awaitable<boost::system::error_code> publisher(
     LOG_DEBUG("Received Event for publish: {}", event);
     auto [id, data] = parseEvent(event);
     eventQue.addEvent(makeEvent(data));
+    co_return boost::system::error_code{};
+}
+net::awaitable<boost::system::error_code> sendEvent(
+    std::shared_ptr<sdbusplus::asio::connection> conn, const std::string& id,
+    Streamer streamer, const std::string& event)
+{
+    auto [ec, msg] = co_await awaitable_dbus_method_call<sdbusplus::message_t>(
+        *conn, SpdmDeviceIface::busName,
+        std::format(SpdmDeviceIface::objPath, id), SpdmDeviceIface::interface,
+        "attest");
+    if (ec)
+    {
+        LOG_ERROR("Failed to send event: {}", ec.message());
+        co_return ec;
+    }
+
     co_return boost::system::error_code{};
 }
 
@@ -101,10 +117,6 @@ int main(int argc, const char* argv[])
                               ssl_client_context, maxConnections);
         auto conn = std::make_shared<sdbusplus::asio::connection>(io_context);
 
-        if (!rip.empty() && !rp.empty())
-        {
-            eventQueue.setQueEndPoint(rip, rp);
-        }
         eventQueue.addEventConsumer(
             "Publish", std::bind_front(publisher, std::ref(eventQueue)));
         // eventQueue.load();
@@ -115,33 +127,22 @@ int main(int argc, const char* argv[])
             LOG_ERROR("Failed to load signing certificate from {}", signcert);
             return 1;
         }
+
         SpdmHandler spdmHandler(
             MeasurementTaker(loadPrivateKey(signprivkey)),
             MeasurementVerifier(getPublicKeyFromCert(verifyCert)), eventQueue,
             io_context);
-        spdmHandler.setSpdmFinishHandler(
-            [&eventQueue, conn](bool status) -> net::awaitable<void> {
-                LOG_INFO("SPDM Handshake finished with status: {}", status);
-                co_await setProperty(
-                    *conn, PicController::busName, PicController::objPath,
-                    PicController::interface, "ProvisioningState", status);
-                co_return;
-            });
         for (const auto& resource : resources)
         {
             spdmHandler.addToMeasure(resource);
         }
-
-        PicController picController(conn, [&eventQueue](bool state) {
-            LOG_INFO("Request for provision {}", state);
-            if (state)
-            {
-                eventQueue.addEvent(makeEvent(SPDM_START, ""));
-            }
-        });
-        LOG_DEBUG("Getting dbus connectionb{}", PicController::busName);
-
-        conn->request_name(PicController::busName);
+        SpdmDeviceIface::ResponderInfo responderInfo{"device1", rip.data(),
+                                                     rp.data()};
+        eventQueue.addEventConsumer(
+            "ATTEST", std::bind_front(sendEvent, conn, responderInfo.id));
+        SpdmDeviceIface spdmDevice(conn, responderInfo, spdmHandler);
+        LOG_DEBUG("Getting dbus connectionb{}", SpdmDeviceIface::busName);
+        conn->request_name(SpdmDeviceIface::busName);
         io_context.run();
     }
     catch (const std::exception& e)

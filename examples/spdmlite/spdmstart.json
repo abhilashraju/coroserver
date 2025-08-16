@@ -1,8 +1,8 @@
 
 {
-    "ip": "9.3.29.122",
+    "ip": "127.0.0.1",
     "port": "8080",
-    "id": "Publish",
-    "data": "SPDM_START_REQUEST:SPDM_START_REQUEST",
+    "id": "ATTEST",
+    "data": "ATTEST:ATTEST",
     "type": "Send"
 }

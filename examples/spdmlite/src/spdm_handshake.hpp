@@ -8,7 +8,8 @@
 
 #include <ranges>
 using namespace NSNAME;
-static constexpr auto SPDM_START = "SPDM_START_REQUEST";
+static constexpr auto SPDM_BEGIN_REQ = "SPDM_BEGIN_REQ";
+static constexpr auto SPDM_BEGIN_READY = "SPDM_BEGIN_READY";
 static constexpr auto MEASUREMENT_REQ_EVENT = "MEASUREMENT_REQ_EVENT";
 static constexpr auto MEASUREMENT_RES_EVENT = "MEASUREMENT_RES_EVENT";
 static constexpr auto MEASUREMENT_DONE_EVENT = "MEASUREMENT_DONE_EVENT";
@@ -29,10 +30,13 @@ struct SpdmHandler
         ioContext(ioContext)
     {
         eventQueue.addEventProvider(
-            SPDM_START, std::bind_front(&SpdmHandler::spdmStartProvider, this));
+            SPDM_BEGIN_REQ,
+            std::bind_front(&SpdmHandler::spdmBeginHandler, this));
         eventQueue.addEventConsumer(
-            SPDM_START, std::bind_front(&SpdmHandler::spdmStartConsumer, this));
+            SPDM_BEGIN_REQ,
+            std::bind_front(&SpdmHandler::spdmBeginConsumer, this));
     }
+
     void setSpdmFinishHandler(SPDM_FINISH_HANDLER handler)
     {
         onSpdmFinish = std::move(handler);
@@ -46,53 +50,76 @@ struct SpdmHandler
         }
         co_return;
     }
+    void setEndPoint(const std::string& ip, const std::string& port)
+    {
+        eventQueue.setQueEndPoint(ip, port);
+    }
     SpdmHandler(const SpdmHandler&) = delete;
     SpdmHandler& operator=(const SpdmHandler&) = delete;
+    SpdmHandler(SpdmHandler&& o) = delete;
     SpdmHandler& addToMeasure(const std::string& exePath)
     {
         toMeasure.push_back(exePath);
         return *this;
     }
 
-    net::awaitable<boost::system::error_code> spdmStartProvider(
+    net::awaitable<boost::system::error_code> spdmBeginConsumer(
         Streamer streamer, const std::string& eventReplay)
     {
         LOG_DEBUG("Received event: {}", eventReplay);
-        auto success =
-            co_await processMeasurementRequest(streamer, eventReplay);
-        if (!success)
+        auto [id, body] = parseEvent(eventReplay);
+        if (id == SPDM_BEGIN_REQ)
         {
-            LOG_ERROR("Failed to process measurement response");
-            co_await finish(false);
+            auto [ec, size] = co_await sendHeader(
+                streamer, makeEvent(SPDM_BEGIN_READY, "SPDM Begin Ready"));
+            if (ec)
+            {
+                LOG_ERROR("Failed to send SPDM Begin Ready: {}", ec.message());
+                co_return ec;
+            }
+            std::string measreq;
+            std::tie(ec, measreq) = co_await readHeader(streamer);
+            if (ec)
+            {
+                LOG_ERROR("Failed to read event: {}", ec.message());
+                co_return ec;
+            }
+            auto success =
+                co_await processMeasurementRequest(streamer, measreq);
+            if (!success)
+            {
+                LOG_ERROR("Failed to make  measurement response");
+                co_return boost::system::error_code{};
+            }
+            LOG_INFO("SPDM measurement completed successfully");
+            LOG_INFO("Waiting for certificate exchange");
+            auto exchanged = co_await waitForCertExchange(streamer);
+            if (!exchanged)
+            {
+                LOG_ERROR("Failed to exchange certificates");
+            }
             co_return boost::system::error_code{};
         }
-        LOG_INFO("SPDM measurement completed successfully");
-        LOG_INFO("Waiting for certificate exchange");
-        auto exchanged = co_await waitForCertExchange(streamer);
-        if (!exchanged)
-        {
-            LOG_ERROR("Failed to exchange certificates");
-        }
-        co_await finish(exchanged);
-        co_return boost::system::error_code{};
     }
-    net::awaitable<boost::system::error_code> spdmStartConsumer(
+    net::awaitable<boost::system::error_code> spdmBeginHandler(
         Streamer streamer, const std::string& event)
     {
         LOG_DEBUG("Received event: {}", event);
         auto [id, body] = parseEvent(event);
-        if (id == SPDM_START)
+        if (id == SPDM_BEGIN_READY)
         {
             auto success = co_await startMeasurement(streamer);
             if (success)
             {
                 LOG_INFO("Starting Certificate Exchange");
                 auto success = co_await exchangeCertificate(streamer);
-                if (!success)
+                if (success)
                 {
-                    LOG_ERROR("Failed to exchange certificates");
+                    co_await finish(success);
+                    co_return boost::system::error_code{};
                 }
             }
+            co_await finish(false);
             co_return boost::system::error_code{};
         }
         LOG_ERROR("Failed to start SPDM measurement: {}", event);
@@ -236,7 +263,7 @@ struct SpdmHandler
         LOG_DEBUG("Starting SPDM handshake");
         nlohmann::json jsonBody;
         jsonBody["bin"] = "spdm_handshake";
-        auto replay = makeEvent(SPDM_START, jsonBody.dump());
+        auto replay = makeEvent(SPDM_BEGIN_REQ, jsonBody.dump());
         eventQueue.addEvent(replay);
     }
 };

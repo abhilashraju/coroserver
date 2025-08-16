@@ -2,9 +2,10 @@
 # Define the executable
 
 executable('spdmlite',
-  'spdmlite.cpp',
+  'src/spdmlite.cpp',
   dependencies: [reactor_dep,sdbusplus_dep],
   cpp_args: ['-DBOOST_ASIO_DISABLE_THREADS'],
+  include_directories:['src','include'],
   install: true,
   install_dir: '/usr/bin'
 )
