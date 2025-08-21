@@ -46,14 +46,13 @@ std::optional<std::pair<X509Ptr, EVP_PKEYPtr>> createAndSaveEntityCertificate(
     std::vector<X509*> cert_chain;
     cert_chain.emplace_back(cert.get());
     cert_chain.emplace_back(ca.get());
-
-    // Save the combined certificate chain to a new file
-    FILE* output_file = fopen(std::get<2>(entity_data[server]).data(), "w");
-    for (auto cert : cert_chain)
+    std::string filename = std::get<2>(entity_data[server]);
+    if (!saveCertificate(filename, cert_chain))
     {
-        PEM_write_X509(output_file, cert);
+        LOG_ERROR("Failed to save entity certificate to {}",
+                  std::get<2>(entity_data[server]));
+        return std::nullopt;
     }
-    fclose(output_file);
     LOG_DEBUG("Entity certificate and private key saved to {} and {}",
               std::get<2>(entity_data[server]),
               std::get<1>(entity_data[server]));
