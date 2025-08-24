@@ -1,0 +1,7 @@
+prefix=/usr/local
+includedir=${prefix}/include
+
+Name: reactor
+Description: Reactor library
+Version: 1.0.0
+Cflags: -I${includedir}

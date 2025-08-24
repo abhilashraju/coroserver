@@ -2,8 +2,18 @@ project('reactor', ['c','cpp'], version: '1.0.0', default_options: ['c_std=c18',
 
 # Find Boost dependency
 #boost_dep = dependency('boost', required: true)
-boost_dep = dependency('boost', modules: ['url'], required: true)
-
+#boost_dep = dependency('boost', modules: ['url'], required: true)
+boost_compile_args = [
+    '-DBOOST_ASIO_DISABLE_THREADS',
+    '-DBOOST_ALL_NO_LIB',
+    '-DBOOST_SYSTEM_NO_DEPRECATED',
+    '-DBOOST_ERROR_CODE_HEADER_ONLY',
+    '-DBOOST_COROUTINES_NO_DEPRECATION_WARNING',
+]
+boost_dep = declare_dependency(
+    dependencies: dependency('boost',modules: ['url'], required: true),
+    compile_args: boost_compile_args,
+)
 openssl_dep = dependency('openssl', required: true)
 zlib_dep = dependency('zlib')
 
@@ -21,9 +31,13 @@ if not nlohmann_json_dep.found()
 endif
 
 sdeventplus_dep = dependency('sdeventplus')
+reactor_inc = include_directories('include')
 reactor_dep = declare_dependency(
-    include_directories:['include'],
-    dependencies:[nlohmann_json_dep,openssl_dep,boost_dep,zlib_dep,sdeventplus_dep]
+    include_directories: reactor_inc,
+    dependencies: [boost_dep,nlohmann_json_dep, openssl_dep, zlib_dep, sdeventplus_dep]
+)
+reactorhead_dep = declare_dependency(
+    include_directories: reactor_inc
 )
 cxx = meson.get_compiler('cpp')
 
@@ -38,12 +52,11 @@ install_subdir('include', install_dir: 'include/reactor',strip_directory: true)
 
 # Create and install pkg-config file
 pkgconfig = import('pkgconfig')
-pkgconfig.generate(
-    name: 'reactor',
-    description: 'Reactor project',
-    version: '1.0.0',
-    libraries: reactor_dep,
-    subdirs: 'reactor',
-    filebase: 'reactor'
-)
 
+pkgconfig.generate(
+  name: 'reactor',
+  description: 'Reactor library',
+  version: meson.project_version(),
+  libraries: reactorhead_dep,
+  install_dir: join_paths(get_option('libdir'), 'pkgconfig')
+)
