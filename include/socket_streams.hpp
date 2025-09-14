@@ -49,6 +49,10 @@ struct TcpStreamType
     {
         return acceptor_.local_endpoint();
     }
+    void cancel()
+    {
+        acceptor_.cancel();
+    }
 };
 
 struct UnixStreamType
@@ -201,4 +205,4 @@ struct TimedStreamer
     std::shared_ptr<StreamType> socket;
     std::shared_ptr<net::steady_timer> timer;
 };
-}
+} // namespace NSNAME

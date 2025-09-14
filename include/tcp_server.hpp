@@ -18,6 +18,10 @@ class TcpServer
     {
         start_accept();
     }
+    ~TcpServer()
+    {
+        acceptor.cancel();
+    }
     auto getLocalEndpoint() const
     {
         return acceptor.getLocalEndpoint();
@@ -69,4 +73,4 @@ class TcpServer
     Accepter& acceptor;
     Router& router;
 };
-}
+} // namespace NSNAME

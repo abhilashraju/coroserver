@@ -1,4 +1,6 @@
 #pragma once
+#include "name_space.hpp"
+
 #include <algorithm>
 #include <vector>
 namespace NSNAME
@@ -49,4 +51,4 @@ struct flat_map
         }
     }
 };
-}
+} // namespace NSNAME

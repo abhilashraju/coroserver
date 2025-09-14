@@ -34,7 +34,6 @@ int main(int argc, const char* argv[])
 
         if (!ep.has_value())
         {
-            LOG_ERROR("Usage: redfishclient --url|-u <url>");
             LOG_ERROR(
                 "Usage: redfishclient -u <user> -p <pswd> -t https://host::port/redfish/v1");
             return EXIT_FAILURE;

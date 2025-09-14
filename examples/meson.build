@@ -11,7 +11,6 @@ subdir('messageque')
 subdir('journalserver')
 
 subdir('redfish_client')
-subdir('redfish_listener')
 subdir('workers')
 subdir('mctp_requester')
 subdir('mctp_responder')
