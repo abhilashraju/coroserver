@@ -1,0 +1,174 @@
+{
+  "description": "Advanced GraphQL queries for cppgraphqlgen implementation",
+  "queries": [
+    {
+      "name": "Simple Query - Get All Users",
+      "query": "query { users { id name email age } }",
+      "description": "Fetch all users with their basic information"
+    },
+    {
+      "name": "Query with Variables",
+      "query": "query GetUser($userId: Int!) { user(id: $userId) { id name email age } }",
+      "variables": {
+        "userId": 1
+      },
+      "description": "Fetch a specific user by ID using variables"
+    },
+    {
+      "name": "Nested Query - Users with Posts",
+      "query": "query { users { id name email posts { id title content } } }",
+      "description": "Fetch users with their associated posts (nested relationship)"
+    },
+    {
+      "name": "Query with Fragments",
+      "query": "fragment UserInfo on User { id name email age } query { users { ...UserInfo } }",
+      "description": "Use fragments to reuse field selections"
+    },
+    {
+      "name": "Query with Aliases",
+      "query": "query { firstUser: user(id: 1) { id name } secondUser: user(id: 2) { id name } }",
+      "description": "Use aliases to fetch multiple users in one query"
+    },
+    {
+      "name": "Posts with Author Information",
+      "query": "query { posts { id title content author { id name email } } }",
+      "description": "Fetch posts with nested author information"
+    },
+    {
+      "name": "Introspection - Schema Types",
+      "query": "query { __schema { types { name kind description } } }",
+      "description": "Introspect the schema to see all available types"
+    },
+    {
+      "name": "Introspection - Query Type",
+      "query": "query { __schema { queryType { name fields { name type { name kind } } } } }",
+      "description": "Introspect available queries"
+    },
+    {
+      "name": "Introspection - Specific Type",
+      "query": "query { __type(name: \"User\") { name fields { name type { name kind } } } }",
+      "description": "Introspect a specific type definition"
+    },
+    {
+      "name": "Create User Mutation",
+      "query": "mutation { createUser(input: { name: \"John Doe\", email: \"john@example.com\", age: 30 }) { id name email age } }",
+      "description": "Create a new user"
+    },
+    {
+      "name": "Create User with Variables",
+      "query": "mutation CreateUser($input: CreateUserInput!) { createUser(input: $input) { id name email age } }",
+      "variables": {
+        "input": {
+          "name": "Jane Smith",
+          "email": "jane@example.com",
+          "age": 28
+        }
+      },
+      "description": "Create a new user using input variables"
+    },
+    {
+      "name": "Update User Mutation",
+      "query": "mutation { updateUser(input: { id: 1, name: \"Alice Updated\", age: 31 }) { id name email age } }",
+      "description": "Update an existing user"
+    },
+    {
+      "name": "Create Post Mutation",
+      "query": "mutation { createPost(input: { title: \"New Post\", content: \"This is a new post\", authorId: 1 }) { id title content authorId } }",
+      "description": "Create a new post"
+    },
+    {
+      "name": "Delete User Mutation",
+      "query": "mutation { deleteUser(id: 3) }",
+      "description": "Delete a user by ID"
+    },
+    {
+      "name": "Complex Query with Multiple Operations",
+      "query": "query GetUserAndPosts($userId: Int!) { user(id: $userId) { id name email posts { id title } } allPosts: posts { id title author { name } } }",
+      "variables": {
+        "userId": 1
+      },
+      "description": "Combine multiple queries with aliases and nested fields"
+    },
+    {
+      "name": "Conditional Fields with Directives",
+      "query": "query GetUser($userId: Int!, $includePosts: Boolean!) { user(id: $userId) { id name email posts @include(if: $includePosts) { id title } } }",
+      "variables": {
+        "userId": 1,
+        "includePosts": true
+      },
+      "description": "Use @include directive to conditionally fetch fields"
+    },
+    {
+      "name": "Skip Fields with Directives",
+      "query": "query GetUsers($skipEmail: Boolean!) { users { id name email @skip(if: $skipEmail) age } }",
+      "variables": {
+        "skipEmail": false
+      },
+      "description": "Use @skip directive to conditionally exclude fields"
+    },
+    {
+      "name": "Multiple Fragments",
+      "query": "fragment BasicUserInfo on User { id name } fragment ContactInfo on User { email } query { users { ...BasicUserInfo ...ContactInfo age } }",
+      "description": "Use multiple fragments in a single query"
+    },
+    {
+      "name": "Inline Fragments",
+      "query": "query { posts { id title ... on Post { content author { name } } } }",
+      "description": "Use inline fragments for type-specific fields"
+    },
+    {
+      "name": "Batch Mutations",
+      "query": "mutation { user1: createUser(input: { name: \"User 1\", email: \"user1@example.com\" }) { id } user2: createUser(input: { name: \"User 2\", email: \"user2@example.com\" }) { id } }",
+      "description": "Execute multiple mutations in a single request"
+    }
+  ],
+  "curl_examples": [
+    {
+      "name": "Simple Query",
+      "command": "curl -k -X POST https://localhost:8443/graphql -H 'Content-Type: application/json' -d '{\"query\": \"{ users { id name email } }\"}'"
+    },
+    {
+      "name": "Query with Variables",
+      "command": "curl -k -X POST https://localhost:8443/graphql -H 'Content-Type: application/json' -d '{\"query\": \"query GetUser($userId: Int!) { user(id: $userId) { id name } }\", \"variables\": {\"userId\": 1}}'"
+    },
+    {
+      "name": "Mutation",
+      "command": "curl -k -X POST https://localhost:8443/graphql -H 'Content-Type: application/json' -d '{\"query\": \"mutation { createUser(input: { name: \\\"Test User\\\", email: \\\"test@example.com\\\" }) { id name } }\"}'"
+    },
+    {
+      "name": "Introspection",
+      "command": "curl -k -X POST https://localhost:8443/graphql -H 'Content-Type: application/json' -d '{\"query\": \"{ __schema { types { name } } }\"}'"
+    }
+  ],
+  "testing_scenarios": [
+    {
+      "scenario": "Basic CRUD Operations",
+      "steps": [
+        "1. Query all users",
+        "2. Create a new user",
+        "3. Query the new user by ID",
+        "4. Update the user",
+        "5. Delete the user",
+        "6. Verify deletion"
+      ]
+    },
+    {
+      "scenario": "Nested Relationships",
+      "steps": [
+        "1. Query users with their posts",
+        "2. Query posts with author information",
+        "3. Create a new post for an existing user",
+        "4. Verify the relationship"
+      ]
+    },
+    {
+      "scenario": "Advanced Features",
+      "steps": [
+        "1. Use fragments to query users",
+        "2. Use aliases to fetch multiple users",
+        "3. Use directives to conditionally include fields",
+        "4. Perform introspection queries"
+      ]
+    }
+  ]
+}

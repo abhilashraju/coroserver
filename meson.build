@@ -10,12 +10,33 @@ boost_compile_args = [
     '-DBOOST_ERROR_CODE_HEADER_ONLY',
     '-DBOOST_COROUTINES_NO_DEPRECATION_WARNING',
 ]
-boost_dep = declare_dependency(
-    dependencies: dependency('boost',modules: ['url'], required: true),
-    compile_args: boost_compile_args,
-)
+# boost_dep = declare_dependency(
+#     dependencies: dependency('boost',modules: ['url'], required: true),
+#     compile_args: boost_compile_args,
+# )
+# Try to find boost via dependency system first, fallback to manual detection
+boost_dep = dependency('boost', version: '>= 1.86', modules: ['url'], required: false)
+
+if not boost_dep.found()
+    # Manual Boost detection for systems without pkg-config support
+    cxx = meson.get_compiler('cpp')
+    
+    # Find boost_url library
+    boost_url_lib = cxx.find_library('boost_url', required: true, dirs: ['/usr/local/lib', '/usr/lib'])
+    
+    # Check for boost headers
+    boost_inc = include_directories('/usr/local/include', is_system: true)
+    
+    # Create boost dependency manually
+    boost_dep = declare_dependency(
+        dependencies: boost_url_lib,
+        include_directories: boost_inc,
+        compile_args: boost_compile_args
+    )
+endif
 openssl_dep = dependency('openssl', required: true)
 zlib_dep = dependency('zlib')
+
 
 nlohmann_json_dep = dependency(
     'nlohmann_json',

@@ -19,11 +19,11 @@ template <typename T, void (*Deleter)(T*)>
 using openssl_ptr = std::unique_ptr<T, decltype(Deleter)>;
 using X509Ptr = openssl_ptr<X509, X509_free>;
 using BIOPtr = openssl_ptr<BIO, BIO_free_all>;
+using EVP_PKEYPtr = openssl_ptr<EVP_PKEY, EVP_PKEY_free>;
 X509Ptr makeX509Ptr(X509* ptr)
 {
     return X509Ptr(ptr, X509_free);
 }
-using EVP_PKEYPtr = openssl_ptr<EVP_PKEY, EVP_PKEY_free>;
 EVP_PKEYPtr makeEVPPKeyPtr(EVP_PKEY* ptr)
 {
     return EVP_PKEYPtr(ptr, EVP_PKEY_free);
@@ -128,92 +128,6 @@ bool derKeyToPem(const std::string& derPath, const std::string& pemPath)
     fclose(pemFile);
     return ret == 1;
 }
-// bool loadTpm2(boost::asio::ssl::context& ctx)
-// {
-//     // Attempt to load certificate and private key from TPM2 using OpenSSL
-//     // engine This assumes the TPM2 OpenSSL engine is installed and
-//     configured
-//     // Example key URI: "tpm2tss-engine:0x81010001"
-//     const char* tpm2_engine_id = "tpm2tss";
-//     const char* tpm2_key_id =
-//         "0x81010001"; // Change as appropriate for your TPM
-
-//     ENGINE_load_dynamic();
-//     ENGINE* e = ENGINE_by_id(tpm2_engine_id);
-//     if (!e)
-//     {
-//         LOG_ERROR("Failed to load TPM2 engine '{}'", tpm2_engine_id);
-//         return false;
-//     }
-//     if (!ENGINE_init(e))
-//     {
-//         LOG_ERROR("Failed to initialize TPM2 engine");
-//         ENGINE_free(e);
-//         return false;
-//     }
-
-//     // Load private key from TPM2
-//     EVP_PKEY* pkey = ENGINE_load_private_key(e, tpm2_key_id, nullptr,
-//     nullptr); if (!pkey)
-//     {
-//         LOG_ERROR("Failed to load private key from TPM2");
-//         ENGINE_finish(e);
-//         ENGINE_free(e);
-//         return false;
-//     }
-
-//     // Load certificate from file or TPM2 (usually certificate is not in
-//     TPM2,
-//     // so load from file)
-//     FILE* certfile = fopen(ENTITY_SERVER_CERT_PATH, "r");
-//     if (!certfile)
-//     {
-//         LOG_ERROR("Failed to open entity certificate file: {}",
-//                   ENTITY_SERVER_CERT_PATH);
-//         EVP_PKEY_free(pkey);
-//         ENGINE_finish(e);
-//         ENGINE_free(e);
-//         return false;
-//     }
-//     X509* cert = PEM_read_X509(certfile, nullptr, nullptr, nullptr);
-//     fclose(certfile);
-//     if (!cert)
-//     {
-//         LOG_ERROR("Failed to read entity certificate from file");
-//         EVP_PKEY_free(pkey);
-//         ENGINE_finish(e);
-//         ENGINE_free(e);
-//         return false;
-//     }
-
-//     // Set certificate and private key in SSL context
-//     if (SSL_CTX_use_certificate(ctx.native_handle(), cert) != 1)
-//     {
-//         LOG_ERROR("Failed to set certificate in SSL context");
-//         X509_free(cert);
-//         EVP_PKEY_free(pkey);
-//         ENGINE_finish(e);
-//         ENGINE_free(e);
-//         return false;
-//     }
-//     if (SSL_CTX_use_PrivateKey(ctx.native_handle(), pkey) != 1)
-//     {
-//         LOG_ERROR("Failed to set private key in SSL context");
-//         X509_free(cert);
-//         EVP_PKEY_free(pkey);
-//         ENGINE_finish(e);
-//         ENGINE_free(e);
-//         return false;
-//     }
-
-//     X509_free(cert);
-//     EVP_PKEY_free(pkey);
-//     ENGINE_finish(e);
-//     ENGINE_free(e);
-
-//     LOG_DEBUG("Loaded certificate and private key from TPM2");
-//     return true;
-// }
 openssl_ptr<EVP_PKEY, EVP_PKEY_free> loadPrivateKey(const std::string& path,
                                                     bool pem = true)
 {

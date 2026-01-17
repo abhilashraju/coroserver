@@ -4,6 +4,7 @@
 
 #include "command_line_parser.hpp"
 #include "logger.hpp"
+#include "stacktrace.hpp"
 using namespace NSNAME;
 int main(int argc, const char* argv[])
 {
@@ -25,13 +26,21 @@ int main(int argc, const char* argv[])
          data = std::string(data.value())]() -> net::awaitable<void> {
             ssl::context ssl_context(ssl::context::sslv23_client);
             TcpClient client(io_context.get_executor(), ssl_context);
+            print_callstack_linux();
             auto ec = co_await client.connect(ip, port);
             if (ec)
             {
                 std::cerr << "Connect error: " << ec.message() << std::endl;
                 co_return;
             }
-            std::string message = !data.empty() ? data : "Hello, Server!";
+            // std::string message = !data.empty() ? data : "Hello, Server!";
+            std::string message = std::format(
+                "GET {} HTTP/1.1\r\n"
+                "Host: rain127bmc.aus.stglabs.ibm.com\r\n"
+                "Connection: close\r\n"
+                "Content-Type: application/json\r\n"
+                "\r\n",
+                std::string(data));
             size_t bytes{0};
             std::tie(ec, bytes) = co_await client.write(net::buffer(message));
             if (ec)

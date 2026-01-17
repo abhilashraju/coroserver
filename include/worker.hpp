@@ -70,9 +70,9 @@ struct WorkerPool
         condition.notify_all();
     }
 };
-inline WorkerPool& getWorkerPool()
+inline WorkerPool& getWorkerPool(int threadCount = 1)
 {
-    static WorkerPool pool(1);
+    static WorkerPool pool(threadCount);
     return pool;
 }
 template <typename RetType>
@@ -89,7 +89,8 @@ inline AwaitableResult<boost::system::error_code, RetType> asyncCall(
                 RetType ret = task();
                 LOG_DEBUG(
                     "Task completed successfully Posting result to process in io context");
-                ctx.post([promise_ptr, ret = std::move(ret)]() mutable {
+                boost::asio::post(ctx, [promise_ptr,
+                                        ret = std::move(ret)]() mutable {
                     LOG_DEBUG("Setting promise values in io context");
                     (*promise_ptr)
                         .setValues(boost::system::error_code{}, std::move(ret));
@@ -99,7 +100,7 @@ inline AwaitableResult<boost::system::error_code, RetType> asyncCall(
             {
                 LOG_ERROR("Exception in task: {}", e.what());
                 LOG_DEBUG("Posting error to process in io context");
-                ctx.post([promise_ptr]() mutable {
+                boost::asio::post(ctx, [promise_ptr]() mutable {
                     (*promise_ptr)
                         .setValues(
                             boost::system::error_code{
@@ -127,7 +128,7 @@ inline AwaitableResult<boost::system::error_code> asyncCall(
                 task();
                 LOG_DEBUG(
                     "Task completed successfully Posting result to process in io context");
-                ctx.post([promise_ptr]() mutable {
+                boost::asio::post(ctx, [promise_ptr]() mutable {
                     LOG_DEBUG("Setting promise values in io context");
                     (*promise_ptr).setValues(boost::system::error_code{});
                 });
@@ -136,7 +137,7 @@ inline AwaitableResult<boost::system::error_code> asyncCall(
             {
                 LOG_ERROR("Exception in task: {}", e.what());
                 LOG_DEBUG("Posting error to process in io context");
-                ctx.post([promise_ptr]() mutable {
+                boost::asio::post(ctx, [promise_ptr]() mutable {
                     (*promise_ptr)
                         .setValues(boost::system::error_code{
                             boost::system::errc::make_error_code(
@@ -147,4 +148,4 @@ inline AwaitableResult<boost::system::error_code> asyncCall(
     });
     co_return co_await h();
 }
-}
+} // namespace NSNAME

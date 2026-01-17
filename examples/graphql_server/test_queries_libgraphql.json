@@ -1,0 +1,144 @@
+{
+  "description": "Test queries for libgraphqlparser implementation",
+  "queries": [
+    {
+      "name": "Simple query - all users",
+      "query": "query { users { id name email age } }",
+      "variables": {},
+      "expected": "Array of users with all fields"
+    },
+    {
+      "name": "Query with argument",
+      "query": "query { user(id: 1) { id name email age } }",
+      "variables": {},
+      "expected": "Single user with id 1"
+    },
+    {
+      "name": "Query with variable",
+      "query": "query GetUser($userId: Int!) { user(id: $userId) { id name email age } }",
+      "variables": {
+        "userId": 2
+      },
+      "expected": "Single user with id 2"
+    },
+    {
+      "name": "Multiple fields query",
+      "query": "query { users { id name } posts { id title } }",
+      "variables": {},
+      "expected": "Users with limited fields and all posts"
+    },
+    {
+      "name": "Posts by author",
+      "query": "query { postsByAuthor(authorId: 1) { id title content authorId } }",
+      "variables": {},
+      "expected": "All posts by author with id 1"
+    },
+    {
+      "name": "Create user mutation",
+      "query": "mutation { createUser(name: \"Test User\", email: \"test@example.com\", age: 25) { id name email age } }",
+      "variables": {},
+      "expected": "Newly created user object"
+    },
+    {
+      "name": "Create user with variables",
+      "query": "mutation CreateUser($name: String!, $email: String!, $age: Int) { createUser(name: $name, email: $email, age: $age) { id name email age } }",
+      "variables": {
+        "name": "Variable User",
+        "email": "variable@example.com",
+        "age": 30
+      },
+      "expected": "Newly created user from variables"
+    },
+    {
+      "name": "Update user mutation",
+      "query": "mutation { updateUser(id: 1, name: \"Updated Name\", age: 35) { id name email age } }",
+      "variables": {},
+      "expected": "Updated user object"
+    },
+    {
+      "name": "Create post mutation",
+      "query": "mutation { createPost(title: \"New Post\", content: \"Post content here\", authorId: 1) { id title content authorId } }",
+      "variables": {},
+      "expected": "Newly created post object"
+    },
+    {
+      "name": "Named query operation",
+      "query": "query GetAllData { users { id name } posts { id title } }",
+      "variables": {},
+      "expected": "Users and posts with named operation"
+    },
+    {
+      "name": "Complex nested selection",
+      "query": "query { users { id name email age } }",
+      "variables": {},
+      "expected": "Users with nested field selection"
+    },
+    {
+      "name": "Invalid query - syntax error",
+      "query": "query { invalid syntax here }",
+      "variables": {},
+      "expected": "Error: Parse error with detailed message"
+    },
+    {
+      "name": "Invalid query - unknown field",
+      "query": "query { unknownField { id } }",
+      "variables": {},
+      "expected": "Error: Unknown query field"
+    },
+    {
+      "name": "Invalid mutation - missing required argument",
+      "query": "mutation { createUser(name: \"Test\") { id } }",
+      "variables": {},
+      "expected": "Error: Missing required argument 'email'"
+    }
+  ],
+  "curl_examples": [
+    {
+      "description": "Simple query",
+      "command": "curl -k -X POST https://localhost:8443/graphql -H 'Content-Type: application/json' -d '{\"query\": \"query { users { id name email } }\"}'"
+    },
+    {
+      "description": "Query with variables",
+      "command": "curl -k -X POST https://localhost:8443/graphql -H 'Content-Type: application/json' -d '{\"query\": \"query GetUser($userId: Int!) { user(id: $userId) { id name } }\", \"variables\": {\"userId\": 1}}'"
+    },
+    {
+      "description": "Mutation",
+      "command": "curl -k -X POST https://localhost:8443/graphql -H 'Content-Type: application/json' -d '{\"query\": \"mutation { createUser(name: \\\"John\\\", email: \\\"john@test.com\\\", age: 28) { id name } }\"}'"
+    },
+    {
+      "description": "Health check",
+      "command": "curl -k https://localhost:8443/health"
+    },
+    {
+      "description": "Schema documentation",
+      "command": "curl -k https://localhost:8443/schema"
+    }
+  ],
+  "validation_tests": [
+    {
+      "name": "Valid GraphQL syntax",
+      "query": "query ValidQuery { users { id name } }",
+      "should_parse": true
+    },
+    {
+      "name": "Invalid GraphQL syntax - missing brace",
+      "query": "query InvalidQuery { users { id name }",
+      "should_parse": false
+    },
+    {
+      "name": "Invalid GraphQL syntax - unexpected token",
+      "query": "query { users { id, name, } }",
+      "should_parse": false
+    },
+    {
+      "name": "Valid mutation",
+      "query": "mutation { createUser(name: \"Test\", email: \"test@test.com\") { id } }",
+      "should_parse": true
+    },
+    {
+      "name": "Valid query with variables",
+      "query": "query GetUser($id: Int!) { user(id: $id) { name } }",
+      "should_parse": true
+    }
+  ]
+}
