@@ -61,7 +61,7 @@ reactorhead_dep = declare_dependency(
     include_directories: reactor_inc
 )
 cxx = meson.get_compiler('cpp')
-
+sdbusplus_dep = dependency('sdbusplus', required: false, include_type: 'system')
 # Add dependencies
 #add_project_arguments(
     #cxx.get_supported_arguments(['-DBOOST_ASIO_DISABLE_THREADS']),language: 'cpp')

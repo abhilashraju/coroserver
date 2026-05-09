@@ -87,6 +87,10 @@ struct UnixStreamType
     {
         return tcp::endpoint();
     }
+    void cancel()
+    {
+        acceptor_.cancel();
+    }
 };
 
 template <typename StreamType>

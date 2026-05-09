@@ -10,13 +10,15 @@
 # subdir('messageque')
 # subdir('journalserver')
 subdir('graphql_server')
+#subdir('uart_server')
+subdir('obmc_console')
 
 # subdir('redfish_client')
 # subdir('workers')
 # subdir('mctp_requester')
 # subdir('mctp_responder')
-# subdir('lldp_discoverd')
-# sdbusplus_dep = dependency('sdbusplus', required: false, include_type: 'system')
+subdir('lldp_discoverd')
+
 # systemd = dependency('systemd',required: false)
 # if sdbusplus_dep.found() and systemd.found()
 #     subdir('server')
