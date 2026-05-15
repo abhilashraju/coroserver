@@ -37,6 +37,8 @@ ALLOW_EMPTY:${PN} = "1"
 FILES:${PN}-console = " \
     ${bindir}/console_server \
     ${bindir}/console_client \
+    ${systemd_system_unitdir}/console_server.service \
+    ${sysconfdir}/obmc-console-multi.conf \
 "
 
 FILES:${PN}-graphql = " \

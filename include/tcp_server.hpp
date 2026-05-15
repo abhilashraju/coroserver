@@ -1,4 +1,5 @@
 #pragma once
+#include "logger.hpp"
 #include "make_awaitable.hpp"
 #include "socket_streams.hpp"
 
@@ -30,32 +31,36 @@ class TcpServer
   private:
     void start_accept()
     {
-        // auto socket =
-        // std::make_shared<boost::asio::ssl::stream<tcp::socket>>(
-        //     context, ssl_context_);
-        // acceptor.async_accept(
-        //     socket->lowest_layer(),
-        //     [this, socket](boost::system::error_code ec) {
-        //         if (!ec)
-        //         {
-        //             boost::asio::co_spawn(context, handle_client(socket),
-        //                                   boost::asio::detached);
-        //         }
-        //         start_accept();
-        //     });
-        acceptor.accept([this](auto&& socket) {
+        acceptor.accept([this](auto&& socket, boost::system::error_code ec) {
+            if (ec)
+            {
+                LOG_ERROR("Accept failed: {}", ec.message());
+                return;
+            }
             boost::asio::co_spawn(context, handle_client(socket),
                                   boost::asio::detached);
             start_accept();
         });
     }
-    template <typename Socket>
+
+    template <typename StreamType>
     boost::asio::awaitable<void> handle_client(
-        std::shared_ptr<boost::asio::ssl::stream<Socket>> socket)
+        std::shared_ptr<StreamType> socket)
     {
-        // Perform SSL handshake
-        co_await socket->async_handshake(boost::asio::ssl::stream_base::server,
-                                         boost::asio::use_awaitable);
+        // Perform SSL handshake only for SSL streams
+        if constexpr (SslStream<StreamType>)
+        {
+            boost::system::error_code ec;
+            co_await socket->async_handshake(
+                boost::asio::ssl::stream_base::server,
+                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+            if (ec)
+            {
+                LOG_ERROR("SSL handshake failed: {}", ec.message());
+                co_return;
+            }
+        }
+
         if constexpr (requires { router(socket); })
         {
             co_await router(socket);
@@ -66,7 +71,12 @@ class TcpServer
             co_await router(Streamer(socket, timer));
             timer->cancel(); // cancel any pending timer
         }
-        co_await socket->async_shutdown(boost::asio::use_awaitable);
+
+        // Perform SSL shutdown only for SSL streams
+        if constexpr (SslStream<StreamType>)
+        {
+            co_await socket->async_shutdown(boost::asio::use_awaitable);
+        }
     }
 
     net::any_io_executor context;

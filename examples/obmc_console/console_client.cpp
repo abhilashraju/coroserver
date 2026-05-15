@@ -21,6 +21,7 @@
 #include "logger.hpp"
 #include "unix_client.hpp"
 
+#include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -29,19 +30,20 @@
 
 #include <csignal>
 #include <iostream>
+#include <stop_token>
 
 using namespace NSNAME;
 using unix_socket = boost::asio::local::stream_protocol;
 
-// Global shutdown flag
-std::atomic<bool> shutdownRequested{false};
+// Global stop source for cooperative cancellation
+std::stop_source globalStopSource;
 
 void signalHandler(int signal)
 {
     if (signal == SIGINT || signal == SIGTERM)
     {
         LOG_INFO("Shutdown signal received");
-        shutdownRequested = true;
+        globalStopSource.request_stop();
     }
 }
 
@@ -74,17 +76,22 @@ class TerminalManager
 
         struct termios raw = origTermios_;
 
-        // Set raw mode
-        cfmakeraw(&raw);
+        // Use canonical mode with echo (line-buffered input)
+        // This allows users to see what they type and edit with backspace
+        raw.c_lflag |= (ECHO | ECHOE | ECHOK); // Enable echo
+        raw.c_lflag |= ICANON; // Enable canonical mode (line buffering)
+
+        // Disable special signal characters (Ctrl+C, Ctrl+Z, etc.)
+        raw.c_lflag &= ~ISIG;
 
         // Apply settings
         if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
         {
-            LOG_ERROR("Failed to set terminal to raw mode");
+            LOG_ERROR("Failed to set terminal mode");
             return false;
         }
 
-        LOG_INFO("Terminal set to raw mode");
+        LOG_INFO("Terminal set to canonical mode with echo");
         return true;
     }
 
@@ -103,48 +110,75 @@ class TerminalManager
 };
 
 /**
- * @brief Escape sequence detector (SSH-style: Enter ~ .)
+ * @brief Input processor - accumulates characters until newline
+ * Also detects escape sequence (Enter ~ .)
  */
-class EscapeDetector
+class InputProcessor
 {
   public:
-    bool process(char c)
+    enum class Result
+    {
+        Continue,   // Keep accumulating
+        SendBuffer, // Send accumulated buffer
+        Escape      // Escape sequence detected
+    };
+
+    Result process(char c)
     {
         switch (state_)
         {
             case State::Normal:
+                buffer_.push_back(c);
                 if (c == '\r' || c == '\n')
                 {
+                    // Send line immediately, then check for escape on next
+                    // input
                     state_ = State::AfterNewline;
+                    return Result::SendBuffer;
                 }
-                break;
+                return Result::Continue;
 
             case State::AfterNewline:
                 if (c == '~')
                 {
                     state_ = State::AfterTilde;
-                    return false; // Don't send tilde yet
+                    return Result::Continue; // Don't add tilde yet, might be
+                                             // escape
                 }
                 else
                 {
+                    // Not an escape sequence, normal character
                     state_ = State::Normal;
+                    buffer_.push_back(c);
+                    return Result::Continue;
                 }
-                break;
 
             case State::AfterTilde:
                 if (c == '.')
                 {
                     LOG_INFO("Escape sequence detected, disconnecting...");
-                    return true; // Escape detected!
+                    return Result::Escape;
                 }
                 else
                 {
-                    // False alarm, send the tilde we held back
+                    // False alarm, add the tilde and current char
+                    buffer_.push_back('~');
+                    buffer_.push_back(c);
                     state_ = State::Normal;
+                    return Result::Continue;
                 }
-                break;
         }
-        return false;
+        return Result::Continue;
+    }
+
+    const std::vector<char>& getBuffer() const
+    {
+        return buffer_;
+    }
+
+    void clearBuffer()
+    {
+        buffer_.clear();
     }
 
   private:
@@ -155,6 +189,7 @@ class EscapeDetector
         AfterTilde
     };
     State state_ = State::Normal;
+    std::vector<char> buffer_;
 };
 
 /**
@@ -164,12 +199,26 @@ class ConsoleClient
 {
   public:
     ConsoleClient(net::any_io_executor io_context,
-                  const std::string& socketPath,
-                  boost::asio::ssl::context& sslContext) :
-        io_context_(io_context), socketPath_(socketPath),
-        client_(io_context, sslContext),
-        stdinStream_(io_context, ::dup(STDIN_FILENO))
-    {}
+                  const std::string& socketPath, std::stop_token stopToken) :
+        io_context_(io_context), socketPath_(socketPath), stopToken_(stopToken),
+        client_(io_context), stdinStream_(io_context)
+    {
+        // Use STDIN_FILENO directly (don't duplicate)
+        // Set stdin to non-blocking mode
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        if (flags >= 0)
+        {
+            fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+        }
+
+        // Assign STDIN_FILENO directly to the stream
+        stdinStream_.assign(STDIN_FILENO);
+    }
+
+    ~ConsoleClient()
+    {
+        cleanup();
+    }
 
     net::awaitable<void> run()
     {
@@ -182,6 +231,7 @@ class ConsoleClient
             if (ec)
             {
                 LOG_ERROR("Failed to connect to socket: {}", ec.message());
+                globalStopSource.request_stop();
                 co_return;
             }
 
@@ -208,7 +258,29 @@ class ConsoleClient
             LOG_ERROR("Exception in console client: {}", e.what());
         }
 
+        cleanup();
+    }
+
+    void cleanup()
+    {
+        // Release stdin stream without closing the fd
+        if (stdinStream_.is_open())
+        {
+            stdinStream_.release(); // Release ownership without closing
+        }
+
+        // Restore terminal settings (including blocking mode)
         termManager_.restore();
+
+        // Restore stdin to blocking mode
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        if (flags >= 0)
+        {
+            fcntl(STDIN_FILENO, F_SETFL, flags & ~O_NONBLOCK);
+        }
+
+        // Close client connection
+        client_.close();
     }
 
   private:
@@ -221,7 +293,7 @@ class ConsoleClient
         {
             std::array<char, 1024> buffer;
 
-            while (!shutdownRequested)
+            while (!stopToken_.stop_requested())
             {
                 auto [ec, bytesRead] =
                     co_await client_.read(boost::asio::buffer(buffer));
@@ -234,8 +306,9 @@ class ConsoleClient
                     }
                     else if (ec != boost::asio::error::operation_aborted)
                     {
-                        LOG_ERROR("Socket read error: {}", ec.message());
+                        continue;
                     }
+                    globalStopSource.request_stop();
                     break;
                 }
 
@@ -255,9 +328,12 @@ class ConsoleClient
         catch (const std::exception& e)
         {
             LOG_ERROR("Exception reading from socket: {}", e.what());
+            globalStopSource.request_stop();
         }
 
-        shutdownRequested = true;
+        globalStopSource.request_stop();
+        // Cancel stdin operations to exit immediately
+        stdinStream_.cancel();
     }
 
     /**
@@ -268,9 +344,9 @@ class ConsoleClient
         try
         {
             std::array<char, 1024> buffer;
-            EscapeDetector escapeDetector;
+            InputProcessor inputProcessor;
 
-            while (!shutdownRequested)
+            while (!stopToken_.stop_requested())
             {
                 boost::system::error_code ec;
                 size_t bytesRead = co_await stdinStream_.async_read_some(
@@ -289,30 +365,48 @@ class ConsoleClient
 
                 if (bytesRead > 0)
                 {
-                    // Check for escape sequence
-                    bool escapeDetected = false;
+                    // Process each character through input processor
                     for (size_t i = 0; i < bytesRead; ++i)
                     {
-                        if (escapeDetector.process(buffer[i]))
+                        auto result = inputProcessor.process(buffer[i]);
+
+                        if (result == InputProcessor::Result::Escape)
                         {
-                            escapeDetected = true;
+                            LOG_INFO("Disconnecting...");
+                            globalStopSource.request_stop();
                             break;
                         }
+                        else if (result == InputProcessor::Result::SendBuffer)
+                        {
+                            // Send the accumulated buffer directly
+                            const auto& sendBuffer = inputProcessor.getBuffer();
+                            if (!sendBuffer.empty())
+                            {
+                                LOG_DEBUG("Sending {} bytes to server",
+                                          sendBuffer.size());
+
+                                auto [ec, bytesWritten] =
+                                    co_await client_.write(boost::asio::buffer(
+                                        sendBuffer.data(), sendBuffer.size()));
+
+                                if (ec)
+                                {
+                                    LOG_ERROR("Socket write error: {}",
+                                              ec.message());
+                                    globalStopSource.request_stop();
+                                    break;
+                                }
+
+                                LOG_DEBUG("Successfully sent {} bytes",
+                                          bytesWritten);
+                            }
+                            inputProcessor.clearBuffer();
+                        }
+                        // Result::Continue means keep accumulating
                     }
 
-                    if (escapeDetected)
+                    if (stopToken_.stop_requested())
                     {
-                        LOG_INFO("Disconnecting...");
-                        break;
-                    }
-
-                    // Write to socket
-                    auto [ec, bytesWritten] = co_await client_.write(
-                        boost::asio::buffer(buffer.data(), bytesRead));
-
-                    if (ec)
-                    {
-                        LOG_ERROR("Socket write error: {}", ec.message());
                         break;
                     }
                 }
@@ -321,14 +415,18 @@ class ConsoleClient
         catch (const std::exception& e)
         {
             LOG_ERROR("Exception reading from stdin: {}", e.what());
+            globalStopSource.request_stop();
         }
 
-        shutdownRequested = true;
+        globalStopSource.request_stop();
+        // Close socket to exit readFromSocket() immediately
+        client_.close();
     }
 
     net::any_io_executor io_context_;
     std::string socketPath_;
-    UnixClient client_;
+    std::stop_token stopToken_;
+    UnixClientPlain client_;
     boost::asio::posix::stream_descriptor stdinStream_;
     TerminalManager termManager_;
 };
@@ -337,6 +435,7 @@ int main(int argc, const char* argv[])
 {
     try
     {
+        reactor::getLogger().setLogLevel(reactor::LogLevel::DEBUG);
         // Parse command line arguments
         auto args = parseCommandline(argc, argv);
         auto [socketOpt] = getArgs(args, "--socket,-s");
@@ -354,10 +453,6 @@ int main(int argc, const char* argv[])
         // Create IO context
         net::io_context io_context;
 
-        // Create SSL context (for potential SSL/TLS support)
-        boost::asio::ssl::context sslContext(
-            boost::asio::ssl::context::sslv23_client);
-
         // Setup signal handling
         boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
         signals.async_wait(
@@ -365,13 +460,14 @@ int main(int argc, const char* argv[])
                 if (!ec)
                 {
                     LOG_INFO("Received signal {}, stopping client...", signal);
-                    shutdownRequested = true;
+                    globalStopSource.request_stop();
                     io_context.stop();
                 }
             });
 
         // Create and run console client
-        ConsoleClient client(io_context.get_executor(), socketPath, sslContext);
+        ConsoleClient client(io_context.get_executor(), socketPath,
+                             globalStopSource.get_token());
 
         boost::asio::co_spawn(io_context, client.run(), boost::asio::detached);
 

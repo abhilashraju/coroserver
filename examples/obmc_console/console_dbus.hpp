@@ -242,10 +242,9 @@ class ConsoleDbusInterface
 
             // Register Connect method
             accessInterface_->register_method(
-                "Connect", [this](sdbusplus::message_t& msg) {
-                    return handleConnect(msg);
+                "Connect", [this]() -> sdbusplus::message::unix_fd {
+                    return handleConnect();
                 });
-
             accessInterface_->initialize();
 
             // Add UART interface
@@ -298,7 +297,7 @@ class ConsoleDbusInterface
      * @brief Handle D-Bus Connect method
      * Creates socket pair and returns client FD
      */
-    sdbusplus::message_t handleConnect(sdbusplus::message_t& msg)
+    sdbusplus::message::unix_fd handleConnect()
     {
         try
         {
@@ -316,15 +315,8 @@ class ConsoleDbusInterface
             LOG_INFO("D-Bus client connected, total consumers: {}",
                      consumers_.size());
 
-            // Return file descriptor to caller
-            auto reply = msg.new_method_return();
-            reply.append(
-                net::posix::stream_descriptor::native_handle_type(clientFd));
-
-            // Close our copy of the client FD after sending
-            ::close(clientFd);
-
-            return reply;
+            // Return file descriptor - sdbusplus will handle the transfer
+            return sdbusplus::message::unix_fd(clientFd);
         }
         catch (const std::exception& e)
         {

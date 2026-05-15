@@ -1,0 +1,31 @@
+[Unit]
+Description=OpenBMC Console Server
+Documentation=man:console-server(8)
+After=network.target
+# Wait for the UART device to be available
+After=dev-ttyS0.device
+Wants=dev-ttyS0.device
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/console_server /etc/obmc-console-multi.conf default
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp /var/log /run
+
+# Resource limits
+LimitNOFILE=65536
+
+# D-Bus integration
+BusName=xyz.openbmc_project.Console.default
+
+[Install]
+WantedBy=multi-user.target

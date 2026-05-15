@@ -10,17 +10,48 @@
 using namespace std::chrono_literals;
 namespace NSNAME
 {
-struct TcpStreamType
+// Concept to detect SSL streams
+template <typename T>
+concept SslStream =
+    requires(T& stream) {
+        {
+            stream.async_handshake(boost::asio::ssl::stream_base::server,
+                                   boost::asio::use_awaitable)
+        };
+        { stream.async_shutdown(boost::asio::use_awaitable) };
+    };
+
+// Concept to detect if handler accepts error_code parameter
+template <typename Handler, typename SocketType>
+concept HandlerAcceptsErrorCode =
+    requires(Handler h, std::shared_ptr<SocketType> socket,
+             boost::system::error_code ec) {
+        { h(std::move(socket), ec) } -> std::same_as<void>;
+    };
+
+// Base template for stream types with SSL support
+template <typename SocketType,
+          typename StreamWrapper = boost::asio::ssl::stream<SocketType>>
+struct StreamTypeBase
 {
-    using stream_type = boost::asio::ssl::stream<tcp::socket>;
+    using stream_type = StreamWrapper;
+    using socket_type = SocketType;
+};
+
+// TCP stream with SSL
+struct TcpStreamType :
+    StreamTypeBase<tcp::socket, boost::asio::ssl::stream<tcp::socket>>
+{
     tcp::acceptor acceptor_;
     net::any_io_executor context;
     boost::asio::ssl::context& ssl_context_;
+
     TcpStreamType(net::any_io_executor io_context, short port,
                   boost::asio::ssl::context& ssl_context) :
         acceptor_(io_context, tcp::endpoint(tcp::v4(), port)),
         context(io_context), ssl_context_(ssl_context)
     {}
+
     TcpStreamType(net::any_io_executor io_context, const std::string& ip,
                   short port, boost::asio::ssl::context& ssl_context) :
         acceptor_(io_context,
@@ -32,37 +63,114 @@ struct TcpStreamType
     void accept(Handler&& handler)
     {
         auto socket = std::make_shared<stream_type>(context, ssl_context_);
-        acceptor_.async_accept(socket->lowest_layer(),
-                               [this, socket, handler = std::move(handler)](
-                                   boost::system::error_code ec) {
-                                   if (!ec)
-                                   {
-                                       handler(std::move(socket));
-                                   }
-                               });
+        acceptor_.async_accept(
+            socket->lowest_layer(),
+            [this, socket, handler = std::move(handler)](
+                boost::system::error_code ec) mutable {
+                if constexpr (HandlerAcceptsErrorCode<Handler, stream_type>)
+                {
+                    handler(std::move(socket), ec);
+                }
+                else
+                {
+                    if (ec)
+                    {
+                        LOG_ERROR("Accept failed: {}", ec.message());
+                    }
+                    else
+                    {
+                        handler(std::move(socket));
+                    }
+                }
+            });
     }
+
     auto getRemoteEndpoint(stream_type& socket)
     {
         return socket.next_layer().remote_endpoint();
     }
+
     auto getLocalEndpoint() const
     {
         return acceptor_.local_endpoint();
     }
+
     void cancel()
     {
         acceptor_.cancel();
     }
 };
 
-struct UnixStreamType
+// TCP stream without SSL (plain)
+struct TcpStreamTypePlain : StreamTypeBase<tcp::socket, tcp::socket>
 {
-    using stream_type =
-        boost::asio::ssl::stream<boost::asio::local::stream_protocol::socket>;
+    tcp::acceptor acceptor_;
+    net::any_io_executor context;
+
+    TcpStreamTypePlain(net::any_io_executor io_context, short port) :
+        acceptor_(io_context, tcp::endpoint(tcp::v4(), port)),
+        context(io_context)
+    {}
+
+    TcpStreamTypePlain(net::any_io_executor io_context, const std::string& ip,
+                       short port) :
+        acceptor_(io_context,
+                  tcp::endpoint(boost::asio::ip::make_address(ip), port)),
+        context(io_context)
+    {}
+
+    template <typename Handler>
+    void accept(Handler&& handler)
+    {
+        auto socket = std::make_shared<stream_type>(context);
+        acceptor_.async_accept(
+            *socket, [this, socket, handler = std::move(handler)](
+                         boost::system::error_code ec) mutable {
+                if constexpr (HandlerAcceptsErrorCode<Handler, stream_type>)
+                {
+                    handler(std::move(socket), ec);
+                }
+                else
+                {
+                    if (ec)
+                    {
+                        LOG_ERROR("Accept failed: {}", ec.message());
+                    }
+                    else
+                    {
+                        handler(std::move(socket));
+                    }
+                }
+            });
+    }
+
+    auto getRemoteEndpoint(stream_type& socket)
+    {
+        return socket.remote_endpoint();
+    }
+
+    auto getLocalEndpoint() const
+    {
+        return acceptor_.local_endpoint();
+    }
+
+    void cancel()
+    {
+        acceptor_.cancel();
+    }
+};
+
+// Unix domain socket with SSL
+struct UnixStreamType :
+    StreamTypeBase<
+        boost::asio::local::stream_protocol::socket,
+        boost::asio::ssl::stream<boost::asio::local::stream_protocol::socket>>
+{
     using unix_domain = boost::asio::local::stream_protocol;
     unix_domain::acceptor acceptor_;
     net::any_io_executor context;
     boost::asio::ssl::context& ssl_context_;
+
     UnixStreamType(net::any_io_executor io_context, const std::string& path,
                    boost::asio::ssl::context& ssl_context) :
         acceptor_(io_context,
@@ -74,19 +182,85 @@ struct UnixStreamType
     void accept(Handler&& handler)
     {
         auto socket = std::make_shared<stream_type>(context, ssl_context_);
-        acceptor_.async_accept(socket->lowest_layer(),
-                               [this, socket, handler = std::move(handler)](
-                                   boost::system::error_code ec) {
-                                   if (!ec)
-                                   {
-                                       handler(std::move(socket));
-                                   }
-                               });
+        acceptor_.async_accept(
+            socket->lowest_layer(),
+            [this, socket, handler = std::move(handler)](
+                boost::system::error_code ec) mutable {
+                if constexpr (HandlerAcceptsErrorCode<Handler, stream_type>)
+                {
+                    handler(std::move(socket), ec);
+                }
+                else
+                {
+                    if (ec)
+                    {
+                        LOG_ERROR("Accept failed: {}", ec.message());
+                    }
+                    else
+                    {
+                        handler(std::move(socket));
+                    }
+                }
+            });
     }
+
     auto getRemoteEndpoint(stream_type& socket)
     {
         return tcp::endpoint();
     }
+
+    void cancel()
+    {
+        acceptor_.cancel();
+    }
+};
+
+// Unix domain socket without SSL (plain)
+struct UnixStreamTypePlain :
+    StreamTypeBase<boost::asio::local::stream_protocol::socket,
+                   boost::asio::local::stream_protocol::socket>
+{
+    using unix_domain = boost::asio::local::stream_protocol;
+    unix_domain::acceptor acceptor_;
+    net::any_io_executor context;
+
+    UnixStreamTypePlain(net::any_io_executor io_context,
+                        const std::string& path) :
+        acceptor_(io_context,
+                  boost::asio::local::stream_protocol::endpoint(path)),
+        context(io_context)
+    {}
+
+    template <typename Handler>
+    void accept(Handler&& handler)
+    {
+        auto socket = std::make_shared<stream_type>(context);
+        acceptor_.async_accept(
+            *socket, [this, socket, handler = std::move(handler)](
+                         boost::system::error_code ec) mutable {
+                if constexpr (HandlerAcceptsErrorCode<Handler, stream_type>)
+                {
+                    handler(std::move(socket), ec);
+                }
+                else
+                {
+                    if (ec)
+                    {
+                        LOG_ERROR("Accept failed: {}", ec.message());
+                    }
+                    else
+                    {
+                        handler(std::move(socket));
+                    }
+                }
+            });
+    }
+
+    auto getRemoteEndpoint(stream_type& socket)
+    {
+        return tcp::endpoint();
+    }
+
     void cancel()
     {
         acceptor_.cancel();
@@ -189,14 +363,28 @@ struct TimedStreamer
             [socket = socket](const boost::system::error_code& ec) {
                 if (!ec)
                 {
-                    socket->next_layer().cancel();
+                    if constexpr (SslStream<StreamType>)
+                    {
+                        socket->next_layer().cancel();
+                    }
+                    else
+                    {
+                        socket->cancel();
+                    }
                 }
             });
     }
     void close()
     {
         boost::system::error_code ec;
-        socket->next_layer().close(ec);
+        if constexpr (SslStream<StreamType>)
+        {
+            socket->next_layer().close(ec);
+        }
+        else
+        {
+            socket->close(ec);
+        }
         if (ec)
         {
             LOG_ERROR("Error closing socket: {}", ec.message());
@@ -204,7 +392,14 @@ struct TimedStreamer
     }
     bool isOpen() const
     {
-        return socket->next_layer().is_open();
+        if constexpr (SslStream<StreamType>)
+        {
+            return socket->next_layer().is_open();
+        }
+        else
+        {
+            return socket->is_open();
+        }
     }
     std::shared_ptr<StreamType> socket;
     std::shared_ptr<net::steady_timer> timer;
