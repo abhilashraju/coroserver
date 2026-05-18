@@ -35,6 +35,10 @@ struct DeviceConfig
     std::string lpcAddress = "0x3f8";
     int sirq = 4;
 
+    // PTY/Shell-specific settings
+    std::string shellPath = "/bin/sh";  // Shell executable path
+    std::vector<std::string> shellArgs; // Shell arguments
+
     // Multiplexing settings
     bool hasMux = false;
     int muxIndex = 0;
@@ -284,6 +288,22 @@ struct ConsoleConfig
                 if (values.count("sirq"))
                 {
                     device.sirq = std::stoi(values.at("sirq"));
+                }
+
+                // PTY/Shell settings
+                if (values.count("shell-path"))
+                {
+                    device.shellPath = values.at("shell-path");
+                }
+                if (values.count("shell-args"))
+                {
+                    std::string args = values.at("shell-args");
+                    std::istringstream iss(args);
+                    std::string arg;
+                    while (iss >> arg)
+                    {
+                        device.shellArgs.push_back(arg);
+                    }
                 }
 
                 // Multiplexing support

@@ -1,278 +1,190 @@
-# OBMC Console Server and Client
+# OpenBMC Console Server
 
-A modern C++20 implementation of OpenBMC console server and client using coroutines and the coroserver framework.
+A modern C++ implementation of the OpenBMC console server using Boost.Asio coroutines and D-Bus integration.
 
-## Overview
+## Features
 
-This implementation provides functionality similar to the original `obmc-console` project but uses modern C++ coroutines and async I/O patterns from the coroserver library.
-
-### Components
-
-1. **console_server** - Server that bridges UART/serial devices to Unix domain sockets
-2. **console_client** - Client that connects to the console server for interactive access
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Console Server                          │
-│                                                             │
-│  ┌──────────────┐      ┌──────────────┐                   │
-│  │ UART Device  │◄────►│  RingBuffer  │                   │
-│  │ /dev/ttyS0   │      │   (128KB)    │                   │
-│  └──────────────┘      └──────┬───────┘                   │
-│                               │                             │
-│                               ▼                             │
-│                    ┌─────────────────────┐                 │
-│                    │  Unix Socket Server │                 │
-│                    │  /tmp/console.sock  │                 │
-│                    └──────────┬──────────┘                 │
-└───────────────────────────────┼──────────────────────────────┘
-                                │
-                    ┌───────────┴───────────┐
-                    │                       │
-            ┌───────▼────────┐      ┌──────▼────────┐
-            │ Console Client │      │ Console Client│
-            │   (Session 1)  │      │  (Session 2)  │
-            └────────────────┘      └───────────────┘
-```
-
-### Key Features
-
-- **Async I/O**: Uses Boost.Asio coroutines for efficient async operations
+- **UART/Serial Device Management**: Manages serial console devices with configurable baud rates
+- **Unix Socket Interface**: Direct client connections via Unix domain sockets
+- **D-Bus Interface**: Full D-Bus integration with file descriptor passing
+  - `xyz.openbmc_project.Console.Access.Connect()` - Returns file descriptor for console access
+  - `xyz.openbmc_project.Console.UART.Baud` - Get/set baud rate property
+- **Console History**: Automatic replay of console history to new clients (128KB buffer)
 - **Multiple Clients**: Supports multiple simultaneous client connections
-- **Console History**: 128KB ringbuffer stores recent console output
-- **Raw Mode**: Terminal set to raw mode for proper console interaction
-- **Escape Sequences**: SSH-style escape sequence (Enter ~ .) to disconnect
-- **Signal Handling**: Graceful shutdown on SIGINT/SIGTERM
+- **Async I/O**: Built on Boost.Asio coroutines for efficient non-blocking operations
 
 ## Building
 
-### Prerequisites
+```bash
+meson setup builddir
+ninja -C builddir
+sudo ninja -C builddir install
+```
 
-- C++20 compatible compiler (GCC 10+, Clang 12+)
-- Boost libraries (1.75+)
-- Meson build system
-- coroserver library headers
+## Installation
 
-### Build Instructions
+The build system installs:
+- `/usr/bin/console_server` - Server executable
+- `/usr/bin/console_client` - Client executable
+- `/lib/systemd/system/console_server.service` - Systemd service file
+- `/etc/obmc-console.conf.example` - Example configuration file
+
+## Configuration
+
+1. Copy the example configuration:
+```bash
+sudo cp /etc/obmc-console.conf.example /etc/obmc-console.conf
+```
+
+2. Edit `/etc/obmc-console.conf`:
+```ini
+# UART device path
+device = /dev/ttyS0
+
+# Baud rate
+local-tty-baud = 115200
+
+# Unix socket path
+socket-path = /tmp/obmc-console.sock
+
+# Log configuration
+logfile = /var/log/obmc-console.log
+logsize = 256k
+```
+
+## Running
+
+### As a systemd service:
 
 ```bash
-cd public/sources/coroserver/examples/obmc_console
-meson setup build
-meson compile -C build
+# Enable and start the service
+sudo systemctl enable console_server.service
+sudo systemctl start console_server.service
+
+# Check status
+sudo systemctl status console_server.service
+
+# View logs
+sudo journalctl -u console_server.service -f
+```
+
+### Manually:
+
+```bash
+# With default console ID
+console_server /etc/obmc-console.conf
+
+# With custom console ID
+console_server /etc/obmc-console.conf ttyS1
 ```
 
 ## Usage
 
-### Console Server
-
-The console server requires a configuration file as its only argument:
+### Via Unix Socket (console_client):
 
 ```bash
-# Start server with configuration file
-./build/console_server /etc/obmc-console.conf
-
-# Or with a local config file
-./build/console_server ./obmc-console.conf
+console_client /tmp/obmc-console.sock
 ```
 
-**Usage:**
-```
-console_server <config-file>
-```
-
-All settings are read from the configuration file. No command line options are supported.
-
-### Configuration File
-
-The configuration file uses a simple `key = value` format:
-
-```ini
-# OBMC Console Server Configuration
-
-# LPC address for the UART device
-lpc-address = 0x3f8
-
-# Serial IRQ number
-sirq = 4
-
-# Local TTY baud rate
-local-tty-baud = 115200
-
-# Log buffer size (supports k, M, G suffixes)
-logsize = 256k
-
-# Log file path
-logfile = /var/log/obmc-console.log
-
-# UART device path
-device = /dev/ttyS0
-
-# Unix socket path
-socket-path = /tmp/obmc-console.sock
-```
-
-See [`obmc-console.conf`](obmc-console.conf) for a complete example.
-
-**Supported Baud Rates:**
-- 9600, 19200, 38400, 57600, 115200, 230400
-
-### Console Client
-
-Connect to the console server:
+### Via D-Bus:
 
 ```bash
-# Basic usage
-./build/console_client
+# Connect and get file descriptor
+busctl call xyz.openbmc_project.Console.default \
+  /xyz/openbmc_project/console/default \
+  xyz.openbmc_project.Console.Access Connect
 
-# Specify socket path
-./build/console_client --socket /tmp/console.sock
+# Get current baud rate
+busctl get-property xyz.openbmc_project.Console.default \
+  /xyz/openbmc_project/console/default \
+  xyz.openbmc_project.Console.UART Baud
 
-# Short option
-./build/console_client -s /tmp/console.sock
+# Set baud rate
+busctl set-property xyz.openbmc_project.Console.default \
+  /xyz/openbmc_project/console/default \
+  xyz.openbmc_project.Console.UART Baud t 115200
 ```
 
-**Options:**
-- `--socket, -s`: Unix socket path (default: `/tmp/obmc-console.sock`)
+## Architecture
 
-**Escape Sequence:**
-To disconnect from the console, press: `Enter ~ .` (newline, tilde, dot)
+### Components
 
-## Example Session
+1. **ConsoleServer**: Main server class managing UART and client connections
+2. **ConsoleRouter**: Handles individual client connections and data routing
+3. **ConsoleDbusInterface**: D-Bus interface implementation
+4. **SocketPairConsumer**: Manages socket pairs for D-Bus clients
+5. **UartDevice**: UART device wrapper with async I/O
 
-### Terminal 1: Start Server
-```bash
-$ ./build/console_server /etc/obmc-console.conf
-[INFO] Loaded configuration from: /etc/obmc-console.conf
-[INFO] Starting console server
-[INFO]   UART device: /dev/ttyS0
-[INFO]   Unix socket: /tmp/obmc-console.sock
-[INFO]   Baud rate: 115200
-[INFO]   Log size: 256k
-[INFO]   Log file: /var/log/obmc-console.log
-[INFO] Unix socket created: /tmp/obmc-console.sock
-[INFO] UART device opened, starting console server
-[INFO] Console server running. Press Ctrl+C to stop.
+### Data Flow
+
+```
+UART Device → ConsoleServer → RingBuffer
+                            ↓
+                    ┌───────┴────────┐
+                    ↓                ↓
+            Unix Socket Clients   D-Bus Clients
+                                (via socket pairs)
 ```
 
-### Terminal 2: Connect Client
-```bash
-$ ./build/console_client -s /tmp/console.sock
-[INFO] Starting console client
-[INFO]   Socket: /tmp/console.sock
-[INFO] Connected to console server
-[INFO] Press Enter ~ . to disconnect
-[INFO] Terminal set to raw mode
+### D-Bus Integration
 
-# You now see the host console output
-Ubuntu 22.04.1 LTS hostname ttyS0
+The server implements two D-Bus interfaces:
 
-hostname login: root
-Password: 
-Last login: Wed May 7 04:00:00 UTC 2026
-root@hostname:~# ls
-file1.txt  file2.txt
-root@hostname:~# 
+1. **xyz.openbmc_project.Console.Access**
+   - `Connect()` method: Creates a socket pair and returns the client FD
+   - Enables file descriptor passing for efficient console access
 
-# Press Enter ~ . to disconnect
-[INFO] Escape sequence detected, disconnecting...
-[INFO] Disconnecting...
-[INFO] Terminal restored to original mode
-[INFO] Console client stopped
-```
+2. **xyz.openbmc_project.Console.UART**
+   - `Baud` property: Get/set UART baud rate
+   - Automatically reconfigures UART device on change
 
-## Implementation Details
+## Comparison with C Implementation
 
-### Console Server
-
-The server implements:
-
-1. **UART Management**
-   - Opens and configures UART device with specified baud rate
-   - Sets terminal to raw mode for proper serial communication
-   - Async read loop for receiving data from UART
-
-2. **Unix Socket Server**
-   - Creates Unix domain socket for client connections
-   - Accepts multiple simultaneous client connections
-   - Each client gets its own session handler
-
-3. **RingBuffer**
-   - 128KB circular buffer stores recent console output
-   - New clients receive console history on connection
-   - Prevents memory overflow with fixed-size buffer
-
-4. **Data Flow**
-   - UART → RingBuffer → All Connected Clients
-   - Any Client → UART (input forwarding)
-
-### Console Client
-
-The client implements:
-
-1. **Terminal Management**
-   - Saves original terminal settings
-   - Sets terminal to raw mode for console interaction
-   - Restores terminal on exit
-
-2. **Bidirectional Forwarding**
-   - Socket → stdout (console output to user)
-   - stdin → Socket (user input to console)
-
-3. **Escape Detection**
-   - Monitors for SSH-style escape sequence (Enter ~ .)
-   - State machine tracks: Normal → AfterNewline → AfterTilde → Escape
-   - Graceful disconnection on escape sequence
-
-## Comparison with Original obmc-console
-
-| Feature | Original obmc-console | This Implementation |
-|---------|----------------------|---------------------|
-| Language | C | C++20 |
-| I/O Model | poll() + callbacks | Coroutines (async/await) |
-| Multiple Clients | ✓ | ✓ |
-| Console History | ✓ (128KB) | ✓ (128KB) |
-| Escape Sequences | ✓ | ✓ |
-| Raw Mode | ✓ | ✓ |
-| Signal Handling | ✓ | ✓ |
-| Code Style | Procedural | Modern C++ |
+| Feature | C Implementation | C++ Implementation |
+|---------|-----------------|-------------------|
+| I/O Model | Poll-based | Async coroutines |
+| D-Bus | sd-bus | sdbusplus |
+| Memory | Manual malloc/free | RAII + smart pointers |
+| Socket Pairs | socketpair() + poll | socketpair() + Boost.Asio |
+| Client Management | Reallocarray | std::vector |
 
 ## Troubleshooting
 
-### Server won't start
+### Service fails to start
 
-**Problem:** `Failed to open UART device`
-- Check device path exists: `ls -l /dev/ttyS0`
-- Check permissions: `sudo chmod 666 /dev/ttyS0`
-- Verify device is not in use: `lsof /dev/ttyS0`
+Check the configuration file:
+```bash
+console_server /etc/obmc-console.conf
+```
 
-**Problem:** `Failed to create Unix socket`
-- Check socket path is writable
-- Remove existing socket: `rm /tmp/console.sock`
-- Check permissions on directory
+### UART device not accessible
 
-### Client can't connect
+Ensure the device exists and has proper permissions:
+```bash
+ls -l /dev/ttyS0
+sudo chmod 666 /dev/ttyS0  # Or add user to dialout group
+```
 
-**Problem:** `Failed to connect to socket`
-- Verify server is running
-- Check socket path matches server
-- Verify socket file exists: `ls -l /tmp/console.sock`
+### D-Bus connection fails
+
+Verify D-Bus is running and the service is registered:
+```bash
+busctl list | grep Console
+```
 
 ### No console output
 
-**Problem:** Connected but no output visible
-- Check UART device is correct
-- Verify baud rate matches host system
-- Check UART cable/connection
-- Try sending data from host: `echo "test" > /dev/ttyS0`
+Check UART device configuration and baud rate:
+```bash
+stty -F /dev/ttyS0
+```
 
 ## License
 
-This implementation follows the same Apache 2.0 license as the coroserver framework.
+Apache License 2.0
 
 ## See Also
 
-- Original obmc-console: https://github.com/openbmc/obmc-console
-- Coroserver framework: `public/sources/coroserver/`
-- UART server example: `public/sources/coroserver/examples/uart_server/`
+- [console_dbus.hpp](../../include/console_dbus.hpp) - D-Bus interface implementation
+- [console_server.cpp](console_server.cpp) - Main server implementation
+- [console_config.hpp](console_config.hpp) - Configuration parser

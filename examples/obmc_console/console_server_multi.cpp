@@ -18,6 +18,7 @@
 #include "console_config.hpp"
 #include "console_dbus.hpp"
 #include "logger.hpp"
+#include "pty_device.hpp"
 #include "tcp_server.hpp"
 #include "uart_server.hpp"
 
@@ -61,10 +62,11 @@ class ConsoleRouter
   public:
     ConsoleRouter(net::any_io_executor io_context, RingBuffer& ringBuffer,
                   std::vector<TimedStreamer<plain_socket>>& clients,
-                  std::unique_ptr<UartDevice>& uart, const std::string& name,
+                  std::unique_ptr<UartDevice>& uart,
+                  std::unique_ptr<PtyDevice>& pty, const std::string& name,
                   std::stop_token stopToken) :
         io_context_(io_context), ringBuffer_(ringBuffer), clients_(clients),
-        uart_(uart), consoleName_(name), stopToken_(stopToken)
+        uart_(uart), pty_(pty), consoleName_(name), stopToken_(stopToken)
     {}
 
     net::awaitable<void> operator()(TimedStreamer<plain_socket> streamer)
@@ -113,16 +115,32 @@ class ConsoleRouter
                 break;
             }
 
-            if (bytesRead > 0 && uart_ && uart_->isOpen())
+            if (bytesRead > 0)
             {
                 std::vector<char> data(buffer.begin(),
                                        buffer.begin() + bytesRead);
-                boost::asio::co_spawn(
-                    io_context_,
-                    [this, data = std::move(data)]() -> net::awaitable<void> {
-                        co_await uart_->write(boost::asio::buffer(data));
-                    },
-                    boost::asio::detached);
+
+                // Write to UART or PTY device
+                if (uart_ && uart_->isOpen())
+                {
+                    boost::asio::co_spawn(
+                        io_context_,
+                        [this,
+                         data = std::move(data)]() -> net::awaitable<void> {
+                            co_await uart_->write(boost::asio::buffer(data));
+                        },
+                        boost::asio::detached);
+                }
+                else if (pty_ && pty_->isOpen())
+                {
+                    boost::asio::co_spawn(
+                        io_context_,
+                        [this,
+                         data = std::move(data)]() -> net::awaitable<void> {
+                            co_await pty_->write(boost::asio::buffer(data));
+                        },
+                        boost::asio::detached);
+                }
             }
         }
 
@@ -146,6 +164,7 @@ class ConsoleRouter
     RingBuffer& ringBuffer_;
     std::vector<TimedStreamer<plain_socket>>& clients_;
     std::unique_ptr<UartDevice>& uart_;
+    std::unique_ptr<PtyDevice>& pty_;
     std::string consoleName_;
     std::stop_token stopToken_;
 };
@@ -163,8 +182,8 @@ class ConsoleInstance
         io_context_(io_context), deviceConfig_(deviceConfig),
         acceptor_(io_context, deviceConfig.socketPath),
         ringBuffer_(128 * 1024), // 128KB buffer
-        router_(io_context, ringBuffer_, clients_, uart_, deviceConfig.name,
-                stopToken),
+        router_(io_context, ringBuffer_, clients_, uart_, pty_,
+                deviceConfig.name, stopToken),
         server_(io_context, acceptor_, router_), bus_(bus),
         stopToken_(stopToken)
     {}
@@ -196,6 +215,10 @@ class ConsoleInstance
         {
             uart_->close();
         }
+        if (pty_)
+        {
+            pty_->close();
+        }
         LOG_INFO("[{}] Console stopped", deviceConfig_.name);
     }
 
@@ -222,6 +245,14 @@ class ConsoleInstance
 
     net::awaitable<void> handleUart()
     {
+        // Handle PTY device
+        if (deviceConfig_.type == DeviceType::PTY)
+        {
+            co_await handlePty();
+            co_return;
+        }
+
+        // Handle UART/VUART device
         UartConfig uartConfig;
         uartConfig.device = deviceConfig_.device;
         uartConfig.baudRate = parseBaudRate(deviceConfig_.baudRate);
@@ -243,13 +274,63 @@ class ConsoleInstance
 
         LOG_INFO("[{}] Device opened successfully", deviceConfig_.name);
 
+        co_await deviceReadLoop(
+            [this](auto buffer)
+                -> net::awaitable<
+                    std::pair<boost::system::error_code, std::size_t>> {
+                co_return co_await uart_->read(buffer);
+            });
+
+        LOG_INFO("[{}] Device handler stopped", deviceConfig_.name);
+    }
+
+    net::awaitable<void> handlePty()
+    {
+        PtyConfig ptyConfig;
+        ptyConfig.shellPath = deviceConfig_.shellPath.empty()
+                                  ? "/bin/sh"
+                                  : deviceConfig_.shellPath;
+        ptyConfig.shellArgs = deviceConfig_.shellArgs;
+        ptyConfig.spawnShell = true;
+
+        pty_ = std::make_unique<PtyDevice>(io_context_, ptyConfig);
+
+        auto ec = pty_->open();
+        if (ec)
+        {
+            LOG_ERROR("[{}] Failed to open PTY: {}", deviceConfig_.name,
+                      ec.message());
+            co_return;
+        }
+
+        LOG_INFO("[{}] PTY opened successfully: {}", deviceConfig_.name,
+                 pty_->getSlaveName());
+        if (pty_->getShellPid() > 0)
+        {
+            LOG_INFO("[{}] Shell process started (PID: {})", deviceConfig_.name,
+                     pty_->getShellPid());
+        }
+
+        co_await deviceReadLoop(
+            [this](auto buffer)
+                -> net::awaitable<
+                    std::pair<boost::system::error_code, std::size_t>> {
+                co_return co_await pty_->read(buffer);
+            });
+
+        LOG_INFO("[{}] PTY handler stopped", deviceConfig_.name);
+    }
+
+    template <typename ReadFunc>
+    net::awaitable<void> deviceReadLoop(ReadFunc readFunc)
+    {
         std::array<char, 1024> buffer;
 
-        while (!stopToken_.stop_requested() && uart_->isOpen())
+        while (!stopToken_.stop_requested())
         {
-            // Read from UART
-            auto [readEc, bytesRead] =
-                co_await uart_->read(boost::asio::buffer(buffer));
+            // Read from device (UART or PTY)
+            auto [readEc,
+                  bytesRead] = co_await readFunc(boost::asio::buffer(buffer));
 
             if (readEc)
             {
@@ -295,12 +376,14 @@ class ConsoleInstance
                 }
             }
         }
-
-        LOG_INFO("[{}] Device handler stopped", deviceConfig_.name);
     }
 
     void initializeDbusInterface()
     {
+        if (!bus_)
+        {
+            return;
+        }
         auto uartWriter = [this](const std::vector<char>& data) {
             if (uart_ && uart_->isOpen())
             {
@@ -308,6 +391,15 @@ class ConsoleInstance
                     io_context_,
                     [this, data]() -> net::awaitable<void> {
                         co_await uart_->write(boost::asio::buffer(data));
+                    },
+                    boost::asio::detached);
+            }
+            else if (pty_ && pty_->isOpen())
+            {
+                boost::asio::co_spawn(
+                    io_context_,
+                    [this, data]() -> net::awaitable<void> {
+                        co_await pty_->write(boost::asio::buffer(data));
                     },
                     boost::asio::detached);
             }
@@ -392,6 +484,7 @@ class ConsoleInstance
     UnixStreamTypePlain acceptor_;
     RingBuffer ringBuffer_;
     std::unique_ptr<UartDevice> uart_;
+    std::unique_ptr<PtyDevice> pty_;
     std::vector<TimedStreamer<plain_socket>> clients_;
     ConsoleRouter router_;
     TcpServer<UnixStreamTypePlain, ConsoleRouter> server_;
@@ -462,7 +555,28 @@ class MultiConsoleServer
     std::shared_ptr<sdbusplus::asio::connection> bus_;
     std::vector<std::unique_ptr<ConsoleInstance>> instances_;
 };
-
+std::shared_ptr<sdbusplus::asio::connection> createDbusConnectio(
+    net::io_context& io_context)
+{
+    std::shared_ptr<sdbusplus::asio::connection> bus;
+    try
+    {
+        bus = std::make_shared<sdbusplus::asio::connection>(io_context);
+        LOG_INFO("D-Bus connection established");
+    }
+    catch (const sdbusplus::exception_t& e)
+    {
+        LOG_WARNING("D-Bus not available: {} - running without D-Bus support",
+                    e.what());
+    }
+    catch (const std::exception& e)
+    {
+        LOG_WARNING(
+            "D-Bus connection failed: {} - running without D-Bus support",
+            e.what());
+    }
+    return bus;
+}
 int main(int argc, const char* argv[])
 {
     try
@@ -505,8 +619,7 @@ int main(int argc, const char* argv[])
         net::io_context io_context;
 
         // Create D-Bus connection
-        auto bus = std::make_shared<sdbusplus::asio::connection>(io_context);
-        LOG_INFO("D-Bus connection established");
+        auto bus = createDbusConnectio(io_context);
 
         // Setup signal handling
         boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
