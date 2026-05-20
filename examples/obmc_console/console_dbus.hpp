@@ -10,13 +10,13 @@
 
 #include "beastdefs.hpp"
 #include "logger.hpp"
+#include "socket_streams.hpp"
 
 #include <sys/socket.h>
 #include <termios.h>
 
 #include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/posix/stream_descriptor.hpp>
-#include <boost/circular_buffer.hpp>
 #include <sdbusplus/asio/connection.hpp>
 #include <sdbusplus/asio/object_server.hpp>
 #include <sdbusplus/asio/property.hpp>
@@ -31,7 +31,6 @@ namespace NSNAME
 {
 
 using unix_socket = boost::asio::local::stream_protocol;
-using RingBuffer = boost::circular_buffer<char>;
 
 /**
  * @brief Socket pair consumer for D-Bus clients
@@ -42,12 +41,11 @@ using RingBuffer = boost::circular_buffer<char>;
 class SocketPairConsumer
 {
   public:
-    SocketPairConsumer(
-        net::any_io_executor io_context, RingBuffer& ringBuffer,
-        std::function<void(const std::vector<char>&)> uartWriter) :
-        io_context_(io_context), ringBuffer_(ringBuffer),
-        uartWriter_(std::move(uartWriter)), serverSocket_(io_context),
-        clientFd_(-1)
+    SocketPairConsumer(net::any_io_executor io_context) :
+        io_context_(io_context),
+        serverSocket_(
+            std::make_shared<net::posix::stream_descriptor>(io_context)),
+        timer_(std::make_shared<net::steady_timer>(io_context))
     {}
 
     ~SocketPairConsumer()
@@ -72,17 +70,9 @@ class SocketPairConsumer
         // fds[1] - client end (returned to D-Bus caller)
         try
         {
-            serverSocket_.assign(fds[0]);
-            clientFd_ = fds[1];
-
-            // Send console history to new client
-            sendHistory();
-
-            // Start reading from client
-            boost::asio::co_spawn(io_context_, handleClient(),
-                                  boost::asio::detached);
-
-            return clientFd_;
+            serverSocket_->assign(fds[0]);
+            // Return client FD - caller takes ownership
+            return fds[1];
         }
         catch (const std::exception& e)
         {
@@ -93,108 +83,33 @@ class SocketPairConsumer
         }
     }
 
-    /**
-     * @brief Write data to this consumer (from UART)
-     */
-    net::awaitable<void> write(const std::vector<char>& data)
-    {
-        if (!serverSocket_.is_open())
-        {
-            co_return;
-        }
-
-        try
-        {
-            co_await net::async_write(serverSocket_, net::buffer(data),
-                                      net::use_awaitable);
-        }
-        catch (const std::exception& e)
-        {
-            LOG_ERROR("Failed to write to socket pair consumer: {}", e.what());
-        }
-    }
-
     bool isOpen() const
     {
-        return serverSocket_.is_open();
+        return serverSocket_->is_open();
+    }
+
+    /**
+     * @brief Get TimedStreamer wrapper for this consumer
+     */
+    auto getTimedStreamer()
+    {
+        return TimedStreamer<net::posix::stream_descriptor>{serverSocket_,
+                                                            timer_};
     }
 
   private:
-    void sendHistory()
-    {
-        if (ringBuffer_.empty() || !serverSocket_.is_open())
-        {
-            return;
-        }
-
-        std::vector<char> history(ringBuffer_.begin(), ringBuffer_.end());
-        boost::asio::co_spawn(
-            io_context_,
-            [this, history]() -> net::awaitable<void> {
-                try
-                {
-                    co_await net::async_write(serverSocket_,
-                                              net::buffer(history),
-                                              net::use_awaitable);
-                }
-                catch (const std::exception& e)
-                {
-                    LOG_ERROR("Failed to send history: {}", e.what());
-                }
-            },
-            boost::asio::detached);
-    }
-
-    net::awaitable<void> handleClient()
-    {
-        std::array<char, 1024> buffer;
-
-        try
-        {
-            while (serverSocket_.is_open())
-            {
-                size_t bytesRead = co_await serverSocket_.async_read_some(
-                    net::buffer(buffer), net::use_awaitable);
-
-                if (bytesRead > 0 && uartWriter_)
-                {
-                    std::vector<char> data(buffer.begin(),
-                                           buffer.begin() + bytesRead);
-                    uartWriter_(data);
-                }
-            }
-        }
-        catch (const boost::system::system_error& e)
-        {
-            if (e.code() != net::error::eof &&
-                e.code() != net::error::operation_aborted)
-            {
-                LOG_ERROR("Socket pair consumer read error: {}", e.what());
-            }
-        }
-
-        close();
-    }
-
     void close()
     {
-        if (serverSocket_.is_open())
+        if (serverSocket_->is_open())
         {
             boost::system::error_code ec;
-            serverSocket_.close(ec);
-        }
-        if (clientFd_ >= 0)
-        {
-            // Client FD is passed to D-Bus caller, they own it
-            clientFd_ = -1;
+            serverSocket_->close(ec);
         }
     }
 
     net::any_io_executor io_context_;
-    RingBuffer& ringBuffer_;
-    std::function<void(const std::vector<char>&)> uartWriter_;
-    net::posix::stream_descriptor serverSocket_;
-    int clientFd_;
+    std::shared_ptr<net::posix::stream_descriptor> serverSocket_;
+    std::shared_ptr<net::steady_timer> timer_;
 };
 
 /**
@@ -203,19 +118,22 @@ class SocketPairConsumer
  * Implements xyz.openbmc_project.Console.Access and
  * xyz.openbmc_project.Console.UART interfaces.
  */
+// Forward declaration
+template <typename StreamType>
+struct TimedStreamer;
+
+template <typename RouterType>
 class ConsoleDbusInterface
 {
   public:
     ConsoleDbusInterface(
         net::any_io_executor io_context,
         std::shared_ptr<sdbusplus::asio::connection> bus,
-        const std::string& consoleId, RingBuffer& ringBuffer,
-        std::function<void(const std::vector<char>&)> uartWriter,
-        std::function<speed_t()> getBaud,
-        std::function<void(speed_t)> setBaud) :
+        const std::string& consoleId, std::function<speed_t()> getBaud,
+        std::function<void(speed_t)> setBaud, RouterType& router) :
         io_context_(io_context), bus_(bus), consoleId_(consoleId),
-        ringBuffer_(ringBuffer), uartWriter_(std::move(uartWriter)),
-        getBaud_(std::move(getBaud)), setBaud_(std::move(setBaud))
+        getBaud_(std::move(getBaud)), setBaud_(std::move(setBaud)),
+        router_(router)
     {}
 
     /**
@@ -271,27 +189,6 @@ class ConsoleDbusInterface
         }
     }
 
-    /**
-     * @brief Broadcast data to all socket pair consumers
-     */
-    net::awaitable<void> broadcastToConsumers(const std::vector<char>& data)
-    {
-        // Remove closed consumers
-        consumers_.erase(std::remove_if(consumers_.begin(), consumers_.end(),
-                                        [](const auto& consumer) {
-                                            return !consumer->isOpen();
-                                        }),
-                         consumers_.end());
-
-        // Broadcast to all active consumers
-        for (auto& consumer : consumers_)
-        {
-            boost::asio::co_spawn(io_context_, consumer->write(data),
-                                  boost::asio::detached);
-        }
-        co_return;
-    }
-
   private:
     /**
      * @brief Handle D-Bus Connect method
@@ -301,8 +198,10 @@ class ConsoleDbusInterface
     {
         try
         {
-            auto consumer = std::make_shared<SocketPairConsumer>(
-                io_context_, ringBuffer_, uartWriter_);
+            // Clean up closed consumers before adding new one
+            cleanupClosedConsumers();
+
+            auto consumer = std::make_shared<SocketPairConsumer>(io_context_);
 
             int clientFd = consumer->createSocketPair();
             if (clientFd < 0)
@@ -312,7 +211,13 @@ class ConsoleDbusInterface
 
             consumers_.push_back(consumer);
 
-            LOG_INFO("D-Bus client connected, total consumers: {}",
+            // Route D-Bus consumer through router's operator()
+            // This treats D-Bus clients exactly like Unix socket clients
+            auto timedStreamer = consumer->getTimedStreamer();
+            boost::asio::co_spawn(io_context_, router_(timedStreamer),
+                                  boost::asio::detached);
+
+            LOG_INFO("D-Bus client connected via router, total consumers: {}",
                      consumers_.size());
 
             // Return file descriptor - sdbusplus will handle the transfer
@@ -323,6 +228,18 @@ class ConsoleDbusInterface
             LOG_ERROR("Connect method failed: {}", e.what());
             throw;
         }
+    }
+
+    /**
+     * @brief Clean up closed consumers from the list
+     */
+    void cleanupClosedConsumers()
+    {
+        consumers_.erase(std::remove_if(consumers_.begin(), consumers_.end(),
+                                        [](const auto& consumer) {
+                                            return !consumer->isOpen();
+                                        }),
+                         consumers_.end());
     }
 
     /**
@@ -414,10 +331,9 @@ class ConsoleDbusInterface
     net::any_io_executor io_context_;
     std::shared_ptr<sdbusplus::asio::connection> bus_;
     std::string consoleId_;
-    RingBuffer& ringBuffer_;
-    std::function<void(const std::vector<char>&)> uartWriter_;
     std::function<speed_t()> getBaud_;
     std::function<void(speed_t)> setBaud_;
+    RouterType& router_;
 
     std::unique_ptr<sdbusplus::asio::object_server> objectServer_;
     std::shared_ptr<sdbusplus::asio::dbus_interface> accessInterface_;

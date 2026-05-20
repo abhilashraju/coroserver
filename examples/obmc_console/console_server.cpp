@@ -273,8 +273,7 @@ class ConsoleServer
         };
 
         dbusInterface_ = std::make_unique<ConsoleDbusInterface>(
-            io_context_, bus_, consoleId_, ringBuffer_, uartWriter, getBaud,
-            setBaud);
+            io_context_, bus_, consoleId_, getBaud, setBaud, uartWriter);
 
         if (!dbusInterface_->initialize())
         {
