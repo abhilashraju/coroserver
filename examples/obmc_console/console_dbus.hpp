@@ -50,6 +50,7 @@ class SocketPairConsumer
 
     ~SocketPairConsumer()
     {
+        LOG_DEBUG("Closing sock pair {}", serverSocket_->native_handle());
         close();
     }
 
@@ -198,9 +199,6 @@ class ConsoleDbusInterface
     {
         try
         {
-            // Clean up closed consumers before adding new one
-            cleanupClosedConsumers();
-
             auto consumer = std::make_shared<SocketPairConsumer>(io_context_);
 
             int clientFd = consumer->createSocketPair();
@@ -209,18 +207,24 @@ class ConsoleDbusInterface
                 throw std::runtime_error("Failed to create socket pair");
             }
 
-            consumers_.push_back(consumer);
-
             // Route D-Bus consumer through router's operator()
             // This treats D-Bus clients exactly like Unix socket clients
+            // Lambda captures consumer ownership and automatically cleans up
+            // when router returns
             auto timedStreamer = consumer->getTimedStreamer();
-            boost::asio::co_spawn(io_context_, router_(timedStreamer),
-                                  boost::asio::detached);
+            boost::asio::co_spawn(
+                io_context_,
+                [consumer, timedStreamer, clientFd,
+                 this]() -> boost::asio::awaitable<void> {
+                    co_await router_(timedStreamer, clientFd);
+                    // consumer is automatically destroyed here when coroutine
+                    // completes
+                },
+                boost::asio::detached);
 
-            LOG_INFO("D-Bus client connected via router, total consumers: {}",
-                     consumers_.size());
+            LOG_INFO("D-Bus client connected via router");
 
-            // Return file descriptor - sdbusplus will handle the transfer
+            // Return file descriptor - sdbusplus will duplicate it for transfer
             return sdbusplus::message::unix_fd(clientFd);
         }
         catch (const std::exception& e)
@@ -228,18 +232,6 @@ class ConsoleDbusInterface
             LOG_ERROR("Connect method failed: {}", e.what());
             throw;
         }
-    }
-
-    /**
-     * @brief Clean up closed consumers from the list
-     */
-    void cleanupClosedConsumers()
-    {
-        consumers_.erase(std::remove_if(consumers_.begin(), consumers_.end(),
-                                        [](const auto& consumer) {
-                                            return !consumer->isOpen();
-                                        }),
-                         consumers_.end());
     }
 
     /**
@@ -338,8 +330,6 @@ class ConsoleDbusInterface
     std::unique_ptr<sdbusplus::asio::object_server> objectServer_;
     std::shared_ptr<sdbusplus::asio::dbus_interface> accessInterface_;
     std::shared_ptr<sdbusplus::asio::dbus_interface> uartInterface_;
-
-    std::vector<std::shared_ptr<SocketPairConsumer>> consumers_;
 };
 
 } // namespace NSNAME

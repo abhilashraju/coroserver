@@ -78,7 +78,8 @@ class ClientWriterImpl : public ClientWriter
 
     net::awaitable<void> write(const std::vector<char>& data) override
     {
-        auto [ec, bytes] = co_await streamer_.write(boost::asio::buffer(data));
+        auto [ec, bytes] =
+            co_await streamer_.write(boost::asio::buffer(data), false);
         if (ec)
         {
             LOG_ERROR("Failed to write to client: {}", ec.message());
@@ -131,7 +132,17 @@ class ConsoleRouter
                 return true; // Terminate connection
             }
 
-            return false; // Socket still open, continue reading
+            // IMPORTANT: When operation_aborted occurs, we cannot reliably
+            // distinguish between a genuine timeout and a closed socket
+            // because is_open() may not immediately reflect the closed state.
+            //
+            // The next read attempt will definitively detect if the socket
+            // is closed and return an appropriate error (EOF, connection_reset,
+            // etc.)
+            //
+            // Therefore, we return false here to allow one more read attempt,
+            // which will properly detect and handle the closed connection.
+            return false; // Continue to next read to detect actual state
         }
 
         // All other errors terminate the connection
@@ -142,14 +153,21 @@ class ConsoleRouter
         }
         return true;
     }
-
+    template <typename StreamType>
+    net::awaitable<void> operator()(TimedStreamer<StreamType> streamer,
+                                    int clientFd)
+    {
+        fdToClose.push_back(clientFd);
+        return operator()(streamer);
+    }
     template <typename StreamType>
     net::awaitable<void> operator()(TimedStreamer<StreamType> streamer)
     {
         static std::atomic<int> clientId{1};
         int myId = clientId++;
 
-        // Add client to list (supports all stream types: Unix socket and D-Bus)
+        // Add client to list (supports all stream types: Unix socket and
+        // D-Bus)
         auto clientWriter =
             std::make_shared<ClientWriterImpl<StreamType>>(streamer);
         clients_.push_back(clientWriter);
@@ -176,7 +194,7 @@ class ConsoleRouter
         while (!stopToken_.stop_requested())
         {
             auto [ec, bytesRead] =
-                co_await streamer.read(boost::asio::buffer(buffer));
+                co_await streamer.read(boost::asio::buffer(buffer), false);
             if (ec)
             {
                 if (shouldTerminateConnection(ec, streamer, myId))
@@ -184,6 +202,14 @@ class ConsoleRouter
                     break;
                 }
                 continue; // Genuine timeout, keep reading
+            }
+
+            // Check for EOF: 0 bytes read with no error means peer closed
+            if (bytesRead == 0)
+            {
+                LOG_INFO("[{}] Client {} closed connection (EOF)", consoleName_,
+                         myId);
+                break;
             }
 
             if (bytesRead > 0)
@@ -222,7 +248,8 @@ class ConsoleRouter
     }
 
     /**
-     * @brief Broadcast data to all connected clients (Unix socket and D-Bus)
+     * @brief Broadcast data to all connected clients (Unix socket and
+     * D-Bus)
      */
     void broadcastToAll(const std::vector<char>& data)
     {
@@ -252,6 +279,10 @@ class ConsoleRouter
      */
     void removeClosedClients()
     {
+        for (int fd : fdToClose)
+        {
+            ::close(fd);
+        }
         clients_.erase(std::remove_if(clients_.begin(), clients_.end(),
                                       [](const auto& client) {
                                           return !client->isOpen();
@@ -266,6 +297,7 @@ class ConsoleRouter
     std::unique_ptr<PtyDevice>& pty_;
     std::string consoleName_;
     std::stop_token stopToken_;
+    std::vector<int> fdToClose;
 };
 
 /**
@@ -276,13 +308,15 @@ class ConsoleInstance
   public:
     ConsoleInstance(net::any_io_executor io_context,
                     const DeviceConfig& deviceConfig,
+                    std::shared_ptr<sdbusplus::asio::connection> sharedBus,
                     std::stop_token stopToken) :
         io_context_(io_context), deviceConfig_(deviceConfig),
         acceptor_(io_context, deviceConfig.socketPath),
         ringBuffer_(128 * 1024), // 128KB buffer
         router_(io_context, ringBuffer_, uart_, pty_, deviceConfig.name,
                 stopToken),
-        server_(io_context, acceptor_, router_), stopToken_(stopToken)
+        server_(io_context, acceptor_, router_), bus_(sharedBus),
+        stopToken_(stopToken)
     {}
 
     boost::system::error_code start()
@@ -497,26 +531,12 @@ class ConsoleInstance
 
     void initializeDbusInterface()
     {
-        // Create dedicated D-Bus connection for this console instance
-        try
-        {
-            // Get the io_context from the executor
-            auto& io_ctx = static_cast<net::io_context&>(io_context_.context());
-            bus_ = std::make_shared<sdbusplus::asio::connection>(io_ctx);
-            LOG_INFO("[{}] D-Bus connection established", deviceConfig_.name);
-        }
-        catch (const sdbusplus::exception_t& e)
+        // Check if shared D-Bus connection is available
+        if (!bus_)
         {
             LOG_WARNING(
-                "[{}] D-Bus not available: {} - running without D-Bus support",
-                deviceConfig_.name, e.what());
-            return;
-        }
-        catch (const std::exception& e)
-        {
-            LOG_WARNING(
-                "[{}] D-Bus connection failed: {} - running without D-Bus support",
-                deviceConfig_.name, e.what());
+                "[{}] No D-Bus connection available - running without D-Bus support",
+                deviceConfig_.name);
             return;
         }
 
@@ -622,12 +642,33 @@ class MultiConsoleServer
         LOG_INFO("Starting multi-device console server");
         LOG_INFO("Number of devices: {}", config_.devices.size());
 
+        // Create shared D-Bus connection for all console instances
+        try
+        {
+            auto& io_ctx = static_cast<net::io_context&>(io_context_.context());
+            sharedBus_ = std::make_shared<sdbusplus::asio::connection>(io_ctx);
+            LOG_INFO("Shared D-Bus connection established");
+        }
+        catch (const sdbusplus::exception_t& e)
+        {
+            LOG_WARNING(
+                "D-Bus not available: {} - consoles will run without D-Bus support",
+                e.what());
+        }
+        catch (const std::exception& e)
+        {
+            LOG_WARNING(
+                "D-Bus connection failed: {} - consoles will run without D-Bus support",
+                e.what());
+        }
+
         for (const auto& deviceConfig : config_.devices)
         {
             // Remove existing socket file
             ::unlink(deviceConfig.socketPath.c_str());
             auto instance = std::make_unique<ConsoleInstance>(
-                io_context_, deviceConfig, globalStopSource.get_token());
+                io_context_, deviceConfig, sharedBus_,
+                globalStopSource.get_token());
 
             auto ec = instance->start();
             if (ec)
@@ -664,6 +705,7 @@ class MultiConsoleServer
   private:
     net::any_io_executor io_context_;
     ConsoleConfig config_;
+    std::shared_ptr<sdbusplus::asio::connection> sharedBus_;
     std::vector<std::unique_ptr<ConsoleInstance>> instances_;
 };
 int main(int argc, const char* argv[])
