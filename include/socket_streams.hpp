@@ -392,14 +392,38 @@ struct TimedStreamer
     }
     bool isOpen() const
     {
+        bool open = false;
         if constexpr (SslStream<StreamType>)
         {
-            return socket->next_layer().is_open();
+            open = socket->next_layer().is_open();
+            if (open)
+            {
+                // Verify the socket is actually usable by checking native
+                // handle
+                boost::system::error_code ec;
+                auto handle = socket->next_layer().native_handle();
+                if (handle == -1)
+                {
+                    return false;
+                }
+            }
         }
         else
         {
-            return socket->is_open();
+            open = socket->is_open();
+            if (open)
+            {
+                // Verify the socket is actually usable by checking native
+                // handle
+                boost::system::error_code ec;
+                auto handle = socket->native_handle();
+                if (handle == -1)
+                {
+                    return false;
+                }
+            }
         }
+        return open;
     }
     std::shared_ptr<StreamType> socket;
     std::shared_ptr<net::steady_timer> timer;

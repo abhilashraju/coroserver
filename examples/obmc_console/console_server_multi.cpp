@@ -157,7 +157,6 @@ class ConsoleRouter
     net::awaitable<void> operator()(TimedStreamer<StreamType> streamer,
                                     int clientFd)
     {
-        fdToClose.push_back(clientFd);
         return operator()(streamer);
     }
     template <typename StreamType>
@@ -279,10 +278,6 @@ class ConsoleRouter
      */
     void removeClosedClients()
     {
-        for (int fd : fdToClose)
-        {
-            ::close(fd);
-        }
         clients_.erase(std::remove_if(clients_.begin(), clients_.end(),
                                       [](const auto& client) {
                                           return !client->isOpen();
@@ -297,7 +292,6 @@ class ConsoleRouter
     std::unique_ptr<PtyDevice>& pty_;
     std::string consoleName_;
     std::stop_token stopToken_;
-    std::vector<int> fdToClose;
 };
 
 /**
@@ -412,6 +406,12 @@ class ConsoleInstance
 
         LOG_INFO("[{}] Device opened successfully", deviceConfig_.name);
 
+        // Configure VUART-specific sysfs attributes if this is a VUART device
+        if (deviceConfig_.type == DeviceType::VUART)
+        {
+            configureVuartSysfs();
+        }
+
         co_await deviceReadLoop(
             [this](auto buffer)
                 -> net::awaitable<
@@ -525,6 +525,50 @@ class ConsoleInstance
 
                 // Broadcast to all clients (Unix socket and D-Bus)
                 router_.broadcastToAll(data);
+            }
+        }
+    }
+
+    /**
+     * @brief Configure VUART sysfs attributes (lpc_address and sirq)
+     */
+    void configureVuartSysfs()
+    {
+        LOG_INFO("[{}] Configuring VUART sysfs attributes", deviceConfig_.name);
+
+        // Parse and configure LPC address
+        if (!deviceConfig_.lpcAddress.empty())
+        {
+            try
+            {
+                // Parse hex string (e.g., "0x3f8")
+                uint16_t lpcAddr = static_cast<uint16_t>(
+                    std::stoul(deviceConfig_.lpcAddress, nullptr, 0));
+                auto ec =
+                    uart_->configureSysfsAttribute("lpc_address", lpcAddr);
+                if (ec)
+                {
+                    LOG_WARNING("[{}] Failed to configure lpc_address: {}",
+                                deviceConfig_.name, ec.message());
+                }
+            }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR("[{}] Invalid lpc_address value '{}': {}",
+                          deviceConfig_.name, deviceConfig_.lpcAddress,
+                          e.what());
+            }
+        }
+
+        // Configure SIRQ
+        if (deviceConfig_.sirq > 0)
+        {
+            auto ec = uart_->configureSysfsAttribute(
+                "sirq", static_cast<uint16_t>(deviceConfig_.sirq));
+            if (ec)
+            {
+                LOG_WARNING("[{}] Failed to configure sirq: {}",
+                            deviceConfig_.name, ec.message());
             }
         }
     }

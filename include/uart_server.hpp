@@ -10,6 +10,9 @@
 #include <boost/asio/posix/stream_descriptor.hpp>
 
 #include <concepts>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -238,7 +241,103 @@ class UartDevice
         return stream_;
     }
 
+    /**
+     * @brief Configure VUART sysfs attribute
+     * @param attrName Attribute name (e.g., "lpc_address", "sirq")
+     * @param value Value to write
+     * @return error_code indicating success or failure
+     */
+    boost::system::error_code configureSysfsAttribute(
+        const std::string& attrName, uint16_t value)
+    {
+        std::string sysfsPath = findSysfsDeviceNode();
+        if (sysfsPath.empty())
+        {
+            LOG_WARNING(
+                "Cannot find sysfs device node for {}, skipping {} configuration",
+                config_.device, attrName);
+            return boost::system::error_code{};
+        }
+
+        std::string attrPath = sysfsPath + "/" + attrName;
+        std::ofstream attrFile(attrPath);
+        if (!attrFile.is_open())
+        {
+            LOG_WARNING("Cannot access sysfs attribute {} for device {}",
+                        attrName, config_.device);
+            return boost::system::error_code(errno,
+                                             boost::system::system_category());
+        }
+
+        attrFile << "0x" << std::hex << value;
+        if (!attrFile.good())
+        {
+            LOG_ERROR("Failed to write to sysfs attribute {} for device {}",
+                      attrName, config_.device);
+            return boost::system::error_code(errno,
+                                             boost::system::system_category());
+        }
+
+        LOG_INFO("Configured {} = 0x{:x} for device {}", attrName, value,
+                 config_.device);
+        return boost::system::error_code{};
+    }
+
   private:
+    /**
+     * @brief Find sysfs device node for the UART device
+     * @return Path to sysfs device node, or empty string if not found
+     */
+    std::string findSysfsDeviceNode()
+    {
+        namespace fs = std::filesystem;
+
+        // Extract device name from path (e.g., "ttyS0" from "/dev/ttyS0")
+        std::string deviceName = fs::path(config_.device).filename().string();
+
+        // Try to resolve symlink if it exists
+        std::error_code ec;
+        fs::path devicePath = fs::canonical(config_.device, ec);
+        if (!ec)
+        {
+            deviceName = devicePath.filename().string();
+        }
+
+        // Build sysfs class path
+        std::string sysfsClassPath = "/sys/class/tty/" + deviceName;
+        fs::path classPath = fs::canonical(sysfsClassPath, ec);
+        if (ec)
+        {
+            LOG_DEBUG("Cannot resolve sysfs path for {}: {}", deviceName,
+                      ec.message());
+            return "";
+        }
+
+        // Try both kernel 6.8+ and pre-6.8 directory structures
+        const std::vector<std::string> relDirs = {"../../../../", "../../"};
+
+        for (const auto& relDir : relDirs)
+        {
+            fs::path deviceNode = classPath / relDir;
+            deviceNode = fs::canonical(deviceNode, ec);
+            if (ec)
+            {
+                continue;
+            }
+
+            // Check if lpc_address exists (indicates VUART)
+            fs::path lpcAddrPath = deviceNode / "lpc_address";
+            if (fs::exists(lpcAddrPath))
+            {
+                LOG_DEBUG("Found VUART sysfs device node: {}",
+                          deviceNode.string());
+                return deviceNode.string();
+            }
+        }
+
+        LOG_DEBUG("No VUART sysfs device node found for {}", deviceName);
+        return "";
+    }
     /**
      * @brief Convert baud rate constant to string
      */
