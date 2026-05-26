@@ -22,6 +22,8 @@
 #include "tcp_server.hpp"
 #include "uart_server.hpp"
 
+#include <unistd.h>
+
 #include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/circular_buffer.hpp>
@@ -157,6 +159,10 @@ class ConsoleRouter
     net::awaitable<void> operator()(TimedStreamer<StreamType> streamer,
                                     int clientFd)
     {
+        if (clientFd >= 0)
+        {
+            fdsToClose_.push_back(clientFd);
+        }
         return operator()(streamer);
     }
     template <typename StreamType>
@@ -283,11 +289,26 @@ class ConsoleRouter
                                           return !client->isOpen();
                                       }),
                        clients_.end());
+        for (int fd : fdsToClose_)
+        {
+            if (fd < 0)
+            {
+                continue;
+            }
+
+            if (::close(fd) != 0)
+            {
+                LOG_ERROR("[{}] Failed to close deferred client fd {}: {}",
+                          consoleName_, fd, strerror(errno));
+            }
+        }
+        fdsToClose_.clear();
     }
 
     net::any_io_executor io_context_;
     RingBuffer& ringBuffer_;
     std::vector<std::shared_ptr<ClientWriter>> clients_;
+    std::vector<int> fdsToClose_;
     std::unique_ptr<UartDevice>& uart_;
     std::unique_ptr<PtyDevice>& pty_;
     std::string consoleName_;
