@@ -17,10 +17,6 @@ inline auto parseCommandline(int argc, const char* argv[])
         i += 2;
         argc -= 2;
     }
-    // for (auto& p : comline)
-    // {
-    //     std::cout << p.first << " : " << p.second << "\n";
-    // }
     return comline;
 }
 template <typename... Args>

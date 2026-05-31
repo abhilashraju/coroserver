@@ -1,0 +1,11 @@
+[Unit]
+Description=attestation service
+
+[Service]
+ExecStart=/usr/bin/spdm_requester -p 2448 -i eth2
+Restart=always
+Type=dbus
+BusName=xyz.openbmc_project.spdm.requester
+
+[Install]
+WantedBy=network.target

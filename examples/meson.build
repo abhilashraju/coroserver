@@ -13,6 +13,10 @@ subdir('graphql_server')
 #subdir('uart_server')
 subdir('obmc_console')
 
+if get_option('spdm').enabled()
+    subdir('spdm')
+endif
+
 # subdir('redfish_client')
 # subdir('workers')
 # subdir('mctp_requester')

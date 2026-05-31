@@ -1,0 +1,11 @@
+[Unit]
+Description=attestation service
+
+[Service]
+ExecStart=/usr/bin/spdm_responder -p 2448 -d this_bmc
+Restart=always
+Type=dbus
+BusName=@DEFAULT_BUSNAME@
+
+[Install]
+WantedBy=multi-user.target

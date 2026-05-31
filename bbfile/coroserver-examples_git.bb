@@ -21,8 +21,9 @@ DEPENDS = " \
     sdbusplus \
 "
 
-PACKAGECONFIG ??= ""
+PACKAGECONFIG ??= "spdm"
 PACKAGECONFIG[libgraphqlparser] = ",,libgraphqlparser"
+PACKAGECONFIG[spdm] = "-Dspdm=enabled,-Dspdm=disabled,libspdm phosphor-logging phosphor-dbus-interfaces"
 
 PACKAGES =+ " \
     ${PN}-console \
@@ -30,6 +31,8 @@ PACKAGES =+ " \
     ${PN}-tcp-server \
     ${PN}-lldp-discoverd \
 "
+
+PACKAGES =+ "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
 
 FILES:${PN} = ""
 ALLOW_EMPTY:${PN} = "1"
@@ -56,12 +59,26 @@ FILES:${PN}-lldp-discoverd = " \
     ${systemd_system_unitdir}/lldp_discoverd.service \
 "
 
+FILES:${PN}-spdm = " \
+    ${bindir}/spdm_responder \
+    ${bindir}/spdm_requester \
+    ${systemd_system_unitdir}/xyz.openbmc_project.spdm.responder.service \
+    ${systemd_system_unitdir}/xyz.openbmc_project.spdm.requester.service \
+    ${sysconfdir}/dbus-1/system.d/xyz.openbmc_project.spdm.responder.conf \
+    ${sysconfdir}/dbus-1/system.d/xyz.openbmc_project.spdm.requester.conf \
+"
+
 FILES:${PN}-dev = " \
     ${includedir}/reactor \
     ${libdir}/pkgconfig/reactor.pc \
 "
 
 SYSTEMD_PACKAGES = "${PN}-lldp-discoverd"
+SYSTEMD_PACKAGES += "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
+
 SYSTEMD_SERVICE:${PN}-lldp-discoverd = "lldp_discoverd.service"
+SYSTEMD_SERVICE:${PN}-spdm = "xyz.openbmc_project.spdm.responder.service xyz.openbmc_project.spdm.requester.service"
 
 RDEPENDS:${PN}-lldp-discoverd += "systemd"
+RDEPENDS:${PN}-spdm += "systemd"
+#PACKAGECONFIG:remove:pn-coroserver-examples = "spdm"
