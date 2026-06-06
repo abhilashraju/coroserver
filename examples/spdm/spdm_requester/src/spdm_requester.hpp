@@ -26,7 +26,7 @@ struct SpdmRequester
 {
   public:
     SpdmRequester(boost::asio::io_context& io,
-                  const std::string& trustStorePath = "/etc/ssl/certs") :
+                  const std::string& trustStorePath) :
         connection_(std::make_unique<SpdmConnectionManager>(io)),
         certificateClient_(nullptr), measurementClient_(nullptr)
     {

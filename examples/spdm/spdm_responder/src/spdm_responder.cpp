@@ -70,7 +70,7 @@ int main(int argc, const char* argv[])
 
     SpdmTcpServer server(io_context, portNumber.value());
     conn->request_name("xyz.openbmc_project.spdm.responder");
-    SpdmResponder responder(server, dbusObject);
+    SpdmResponder responder(server, dbusObject, "/etc/ssl/certs/authority");
 
     responder.run();
     io_context.run();

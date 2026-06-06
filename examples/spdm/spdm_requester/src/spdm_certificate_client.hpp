@@ -26,8 +26,7 @@ constexpr uint64_t DEVICE_IO_TIMEOUT_CERT = 10000000;
 class SpdmCertificateClient
 {
   public:
-    SpdmCertificateClient(void* spdmContext,
-                          const std::string& trustStorePath = "/etc/ssl/certs")
+    SpdmCertificateClient(void* spdmContext, const std::string& trustStorePath)
     {
         spdmContext_ = spdmContext;
         trustStore_ =

@@ -341,7 +341,7 @@ class ComponentIntegrity :
              deviceInfo = std::move(deviceInfo)]() -> net::awaitable<void> {
                 auto spmdmtask = [&ioContext, conn, &deviceInfo]() {
                     auto requester = std::make_shared<SpdmRequester>(
-                        ioContext, "/etc/ssl/certs");
+                        ioContext, "/etc/ssl/certs/authority");
 
                     if (!connectToResponder(requester, deviceInfo))
                     {

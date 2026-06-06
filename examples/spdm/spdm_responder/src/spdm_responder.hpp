@@ -14,8 +14,8 @@ struct SpdmResponder
 {
   public:
     SpdmResponder(SpdmTcpServer& server,
-                  std::shared_ptr<SpdmResponderObject> dbusObj = nullptr,
-                  const std::string& trustStorePath = "/etc/ssl/certs") :
+                  std::shared_ptr<SpdmResponderObject> dbusObj,
+                  const std::string& trustStorePath) :
         server(server), dbusObject(dbusObj),
         certExchangeHandler(
             std::make_shared<FileCertificateTrustStore>(trustStorePath),

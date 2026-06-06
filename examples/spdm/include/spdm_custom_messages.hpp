@@ -1,16 +1,40 @@
 #pragma once
 
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <memory>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
 extern "C"
 {
 #include <library/spdm_common_lib.h>
+}
+
+// RAII wrappers for OpenSSL types
+template <typename T, void (*Deleter)(T*)>
+using openssl_ptr = std::unique_ptr<T, decltype(Deleter)>;
+
+using X509Ptr = openssl_ptr<X509, X509_free>;
+using BIOPtr = openssl_ptr<BIO, BIO_free_all>;
+
+inline X509Ptr makeX509Ptr(X509* ptr)
+{
+    return X509Ptr(ptr, X509_free);
+}
+
+inline BIOPtr makeBIOPtr(BIO* ptr)
+{
+    return BIOPtr(ptr, BIO_free_all);
 }
 // Custom SPDM message codes for certificate exchange
 // Using vendor-defined message codes (0x7E-0x7F range for vendor-specific)
@@ -156,6 +180,94 @@ class FileCertificateTrustStore : public CertificateTrustStore
         }
     }
 
+  private:
+    // Helper function to create certificate hash symlink for trust store
+    bool createCertificateHashFile(const X509Ptr& cert,
+                                   const std::string& certPath)
+    {
+        if (!cert)
+        {
+            LOG_ERROR("Certificate pointer is null");
+            return false;
+        }
+
+        // Calculate the certificate hash using X509_subject_name_hash
+        unsigned long hash = X509_subject_name_hash(cert.get());
+
+        // Get the directory path where the certificate is stored
+        std::filesystem::path certFilePath(certPath);
+        std::filesystem::path certDir = certFilePath.parent_path();
+
+        // Format hash as 8-digit hex string
+        std::ostringstream hashStream;
+        hashStream << std::hex << std::setw(8) << std::setfill('0') << hash;
+        std::string hashStr = hashStream.str();
+
+        // Find the next available index for this hash (handle collisions)
+        int index = 0;
+        std::filesystem::path hashFilePath;
+        do
+        {
+            hashFilePath = certDir / (hashStr + "." + std::to_string(index));
+            index++;
+        } while (std::filesystem::exists(hashFilePath) && index < 100);
+
+        if (index >= 100)
+        {
+            LOG_ERROR("Too many hash collisions for certificate hash {}",
+                      hashStr);
+            return false;
+        }
+
+        // Create symlink from hash file to actual certificate
+        std::error_code ec;
+        std::filesystem::create_symlink(certFilePath.filename(), hashFilePath,
+                                        ec);
+        if (ec)
+        {
+            LOG_ERROR("Failed to create hash symlink {} -> {}: {}",
+                      hashFilePath.string(), certFilePath.string(),
+                      ec.message());
+            return false;
+        }
+
+        LOG_DEBUG("Created certificate hash file: {} -> {}",
+                  hashFilePath.string(), certFilePath.string());
+        return true;
+    }
+
+    // Helper function to parse certificate from raw data
+    X509Ptr parseCertificate(const std::vector<uint8_t>& cert,
+                             CertificateFormat format)
+    {
+        BIOPtr bio = makeBIOPtr(
+            BIO_new_mem_buf(cert.data(), static_cast<int>(cert.size())));
+        if (!bio)
+        {
+            LOG_ERROR("Failed to create BIO from certificate data");
+            return makeX509Ptr(nullptr);
+        }
+
+        X509* x509 = nullptr;
+        if (format == CertificateFormat::PEM)
+        {
+            x509 = PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr);
+        }
+        else // DER format
+        {
+            x509 = d2i_X509_bio(bio.get(), nullptr);
+        }
+
+        if (!x509)
+        {
+            LOG_ERROR("Failed to parse certificate from {} format",
+                      format == CertificateFormat::PEM ? "PEM" : "DER");
+        }
+
+        return makeX509Ptr(x509);
+    }
+
+  public:
     std::tuple<bool, std::string> storeCertificate(
         const std::vector<uint8_t>& cert, CertificateFormat format,
         const std::string& identifier) override
@@ -190,6 +302,31 @@ class FileCertificateTrustStore : public CertificateTrustStore
             {
                 LOG_ERROR("Failed to write certificate file: {}", certPath);
                 return std::make_tuple(false, std::string());
+            }
+
+            // Parse the certificate to create hash-based symlink
+            X509Ptr x509 = parseCertificate(cert, format);
+            if (x509)
+            {
+                // Create hash-based symlink for trust store compatibility
+                if (!createCertificateHashFile(x509, certPath))
+                {
+                    LOG_ERROR("Failed to create certificate hash file for {}",
+                              certPath);
+                    // Continue anyway - the certificate is stored, just without
+                    // hash link
+                }
+                else
+                {
+                    LOG_DEBUG("Certificate stored with hash symlink: {}",
+                              certPath);
+                }
+            }
+            else
+            {
+                LOG_WARNING("Could not parse certificate for hash generation, "
+                            "stored without hash symlink: {}",
+                            certPath);
             }
 
             return std::make_tuple(true, certPath);
