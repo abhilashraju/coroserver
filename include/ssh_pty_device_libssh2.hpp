@@ -1,24 +1,19 @@
 #pragma once
 #include "async_wait.hpp"
 #include "beastdefs.hpp"
-#include "file_descriptor.hpp"
 #include "logger.hpp"
 
 #include <arpa/inet.h>
-#include <fcntl.h>
 #include <libssh2.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <pty.h>
-#include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <termios.h>
-#include <unistd.h>
 
-#include <boost/asio/posix/stream_descriptor.hpp>
 #include <boost/asio/steady_timer.hpp>
 
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -151,28 +146,26 @@ struct SshPtyConfig
  * @brief SSH PTY device using libssh2 - connects to remote machine via SSH
  *
  * This device uses libssh2 to establish SSH connections programmatically,
- * supporting both password and key-based authentication. It creates a PTY
- * pair and forwards all I/O through the SSH channel using Boost.Asio
- * coroutines.
+ * supporting both password and key-based authentication. It reads data
+ * directly from the SSH channel and uses a callback mechanism to deliver
+ * data to the server, which then broadcasts to multiple clients.
  *
- * Architecture:
- *   Console Client <-> Unix Socket <-> Console Server <-> PTY Master
- *                                                           |
- *                                                      PTY Slave
- *                                                           |
- *                                                   Asio Coroutines
- *                                                           |
- *                                                   [SSH Channel]
- *                                                           |
- *                                              Remote Machine Shell
+ * Architecture (NO PTY master/slave):
+ *   Console Clients <-> Unix Socket <-> Console Server <-> SshPtyDevice
+ *                                            |                    |
+ *                                       Ring Buffer          SSH Channel
+ *                                            |                    |
+ *                                       Broadcast            Remote Shell
+ *
+ * This eliminates the race condition where multiple clients compete for
+ * the same PTY master stream.
  */
 class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
 {
   public:
     SshPtyDevice(net::any_io_executor io_context, const SshPtyConfig& config) :
-        config(config), executor(io_context), masterStream(io_context),
-        slaveStream(io_context), sshSocket(io_context), masterFd(), slaveFd(),
-        session(), channel(), ssh2Lib(), connected(false)
+        config(config), executor(io_context), sshSocket(io_context), session(),
+        channel(), ssh2Lib(), connected(false)
     {}
 
     ~SshPtyDevice()
@@ -186,43 +179,6 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
      */
     boost::system::error_code open()
     {
-        char slave_name[256];
-
-        // Create pseudo-terminal pair
-        int master_tmp, slave_tmp;
-        if (openpty(&master_tmp, &slave_tmp, slave_name, nullptr, nullptr) < 0)
-        {
-            LOG_ERROR("Failed to create PTY pair for SSH connection");
-            return boost::system::error_code(errno,
-                                             boost::system::system_category());
-        }
-
-        masterFd.reset(master_tmp);
-        slaveFd.reset(slave_tmp);
-
-        // Set non-blocking mode for slave fd
-        int flags = fcntl(slaveFd.get(), F_GETFL, 0);
-        fcntl(slaveFd.get(), F_SETFL, flags | O_NONBLOCK);
-
-        // Disable local echo on PTY to prevent double-echoing
-        // The remote SSH server will handle echoing
-        struct termios tios;
-        if (tcgetattr(slaveFd.get(), &tios) == 0)
-        {
-            tios.c_lflag &= ~(ECHO | ECHOE | ECHOK | ECHONL);
-            tcsetattr(slaveFd.get(), TCSANOW, &tios);
-            LOG_DEBUG("Disabled local echo on PTY slave");
-        }
-        else
-        {
-            LOG_WARNING("Failed to disable echo on PTY slave: {}",
-                        strerror(errno));
-        }
-
-        slaveName = slave_name;
-        LOG_INFO("SSH PTY pair created: master_fd={}, slave={}", masterFd.get(),
-                 slaveName);
-
         // Initialize libssh2
         int rc = ssh2Lib.init();
         if (rc != 0)
@@ -256,14 +212,8 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
         // Set non-blocking mode
         libssh2_session_set_blocking(session.get(), 0);
 
-        // Assign file descriptors to streams
-        masterStream.assign(masterFd.get());
-        slaveStream.assign(slaveFd.get());
-
-        // Start I/O forwarding coroutines
+        // Device is ready - server will call read() to get data
         connected = true;
-        co_spawn(executor, slaveToSshForwarder(), net::detached);
-        co_spawn(executor, sshToSlaveForwarder(), net::detached);
 
         LOG_INFO("SSH PTY device opened successfully, connected to {}@{}:{}",
                  config.remoteUser, config.remoteHost, config.remotePort);
@@ -276,16 +226,6 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
     void close()
     {
         connected = false;
-
-        // Release stream descriptors before closing file descriptors
-        if (masterStream.is_open())
-        {
-            masterStream.release();
-        }
-        if (slaveStream.is_open())
-        {
-            slaveStream.release();
-        }
 
         // Close SSH socket
         if (sshSocket.is_open())
@@ -301,36 +241,94 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
         // RAII wrappers automatically clean up resources in correct order
         channel.reset();
         session.reset();
-        masterFd.reset();
-        slaveFd.reset();
 
         LOG_INFO("SSH PTY device closed");
     }
 
     /**
-     * @brief Async read from SSH PTY
+     * @brief Async read from SSH channel (for server's deviceReadLoop)
      * @param buffer Buffer to read into
      * @return Pair of error_code and bytes read
      */
     net::awaitable<std::pair<boost::system::error_code, std::size_t>> read(
         net::mutable_buffer buffer)
     {
-        auto [ec, bytes] = co_await masterStream.async_read_some(
-            buffer, boost::asio::as_tuple(boost::asio::use_awaitable));
-        co_return std::make_pair(ec, bytes);
+        // Wait for SSH socket to become readable
+        auto [wait_ec] = co_await sshSocket.async_wait(
+            tcp::socket::wait_read,
+            boost::asio::as_tuple(boost::asio::use_awaitable));
+
+        if (wait_ec)
+        {
+            co_return std::make_pair(wait_ec, 0);
+        }
+
+        // Read from SSH channel
+        char* data = static_cast<char*>(buffer.data());
+        size_t size = buffer.size();
+
+        int rc = libssh2_channel_read(channel.get(), data, size);
+
+        if (rc > 0)
+        {
+            co_return std::make_pair(boost::system::error_code{},
+                                     static_cast<size_t>(rc));
+        }
+        else if (rc == LIBSSH2_ERROR_EAGAIN)
+        {
+            // Would block, return 0 bytes
+            co_return std::make_pair(boost::system::error_code{}, 0);
+        }
+        else if (rc == 0)
+        {
+            // EOF
+            co_return std::make_pair(boost::asio::error::eof, 0);
+        }
+        else
+        {
+            // Error
+            LOG_ERROR("SSH channel read failed: {}", rc);
+            co_return std::make_pair(boost::system::error_code(
+                                         EIO, boost::system::system_category()),
+                                     0);
+        }
     }
 
     /**
-     * @brief Async write to SSH PTY
+     * @brief Async write to SSH channel
      * @param buffer Buffer to write from
      * @return Pair of error_code and bytes written
      */
     net::awaitable<std::pair<boost::system::error_code, std::size_t>> write(
         net::const_buffer buffer)
     {
-        auto [ec, bytes] = co_await masterStream.async_write_some(
-            buffer, boost::asio::as_tuple(boost::asio::use_awaitable));
-        co_return std::make_pair(ec, bytes);
+        const char* data = static_cast<const char*>(buffer.data());
+        size_t size = buffer.size();
+        size_t nwritten = 0;
+
+        while (nwritten < size && connected)
+        {
+            int rc = libssh2_channel_write(channel.get(), data + nwritten,
+                                           size - nwritten);
+            if (rc < 0)
+            {
+                if (rc == LIBSSH2_ERROR_EAGAIN)
+                {
+                    // Wait a bit and retry
+                    using namespace std::chrono_literals;
+                    co_await waitFor(executor, 10ms);
+                    continue;
+                }
+                LOG_ERROR("SSH channel write failed: {}", rc);
+                co_return std::make_pair(
+                    boost::system::error_code(EIO,
+                                              boost::system::system_category()),
+                    nwritten);
+            }
+            nwritten += rc;
+        }
+
+        co_return std::make_pair(boost::system::error_code{}, nwritten);
     }
 
     /**
@@ -338,15 +336,15 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
      */
     bool isOpen() const
     {
-        return masterFd.isValid() && masterStream.is_open() && connected;
+        return connected && sshSocket.is_open();
     }
 
     /**
-     * @brief Get slave PTY name
+     * @brief Get slave PTY name (returns empty for SSH - no PTY)
      */
     std::string getSlaveName() const
     {
-        return slaveName;
+        return ""; // No PTY slave in this implementation
     }
 
     /**
@@ -572,8 +570,7 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
                                              boost::system::system_category());
         }
 
-        // Request a PTY - use standard request without disabling echo
-        // We only disable local PTY echo, let remote handle its own echo
+        // Request a PTY
         int rc = libssh2_channel_request_pty(channel.get(), "xterm");
         if (rc != 0)
         {
@@ -605,184 +602,9 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
         return boost::system::error_code{};
     }
 
-    /**
-     * @brief Disconnect from remote host
-     */
-    void disconnectFromHost()
-    {
-        // RAII wrappers handle cleanup automatically
-        channel.reset();
-        session.reset();
-
-        if (sshSocket.is_open())
-        {
-            boost::system::error_code ec;
-            sshSocket.close(ec);
-        }
-    }
-
-    /**
-     * @brief Coroutine to forward data from PTY slave to SSH channel
-     */
-    net::awaitable<void> slaveToSshForwarder()
-    {
-        char buffer[4096];
-        LOG_INFO("Starting slave->SSH forwarding coroutine");
-
-        try
-        {
-            while (connected)
-            {
-                // Read from PTY slave
-                auto [ec, nread] = co_await slaveStream.async_read_some(
-                    net::buffer(buffer),
-                    boost::asio::as_tuple(boost::asio::use_awaitable));
-
-                if (ec)
-                {
-                    if (ec == boost::asio::error::operation_aborted)
-                    {
-                        break;
-                    }
-                    LOG_ERROR("PTY slave read failed: {}", ec.message());
-                    connected = false;
-                    break;
-                }
-
-                if (nread > 0)
-                {
-                    // Write to SSH channel (with retry for EAGAIN)
-                    size_t nwritten = 0;
-                    while (nwritten < nread && connected)
-                    {
-                        int rc = libssh2_channel_write(
-                            channel.get(), buffer + nwritten, nread - nwritten);
-                        if (rc < 0)
-                        {
-                            if (rc == LIBSSH2_ERROR_EAGAIN)
-                            {
-                                // Wait a bit and retry
-                                using namespace std::chrono_literals;
-                                co_await waitFor(executor, 10ms);
-                                continue;
-                            }
-                            LOG_ERROR("SSH channel write failed: {}", rc);
-                            connected = false;
-                            break;
-                        }
-                        nwritten += rc;
-                    }
-                }
-            }
-        }
-        catch (const std::exception& e)
-        {
-            LOG_ERROR("Exception in slave->SSH forwarder: {}", e.what());
-            connected = false;
-        }
-
-        LOG_INFO("Slave->SSH forwarding coroutine terminated");
-    }
-
-    /**
-     * @brief Coroutine to forward data from SSH channel to PTY slave
-     */
-    net::awaitable<void> sshToSlaveForwarder()
-    {
-        char buffer[4096];
-        LOG_INFO("Starting SSH->slave forwarding coroutine");
-
-        try
-        {
-            while (connected)
-            {
-                // Wait for SSH socket to become readable (async, no polling!)
-                auto [wait_ec] = co_await sshSocket.async_wait(
-                    tcp::socket::wait_read,
-                    boost::asio::as_tuple(boost::asio::use_awaitable));
-
-                if (wait_ec)
-                {
-                    if (wait_ec != boost::asio::error::operation_aborted)
-                    {
-                        LOG_ERROR("SSH socket wait failed: {}",
-                                  wait_ec.message());
-                    }
-                    connected = false;
-                    break;
-                }
-
-                // Socket is readable, now read from SSH channel
-                int rc =
-                    libssh2_channel_read(channel.get(), buffer, sizeof(buffer));
-
-                if (rc > 0)
-                {
-                    // Write to PTY slave
-                    size_t nwritten = 0;
-                    while (nwritten < static_cast<size_t>(rc) && connected)
-                    {
-                        auto [ec, n] =
-                            co_await slaveStream.async_write_some(
-                                net::buffer(buffer + nwritten, rc - nwritten),
-                                boost::asio::as_tuple(
-                                    boost::asio::use_awaitable));
-
-                        if (ec)
-                        {
-                            LOG_ERROR("PTY slave write failed: {}",
-                                      ec.message());
-                            connected = false;
-                            break;
-                        }
-                        nwritten += n;
-                    }
-                }
-                else if (rc == LIBSSH2_ERROR_EAGAIN)
-                {
-                    // Spurious wakeup, loop back to wait again
-                    continue;
-                }
-                else if (rc < 0)
-                {
-                    LOG_ERROR("SSH channel read failed: {}", rc);
-                    connected = false;
-                    break;
-                }
-                else
-                {
-                    // rc == 0: EOF
-                    LOG_INFO("SSH channel closed by remote");
-                    connected = false;
-                    break;
-                }
-
-                // Check if channel is closed
-                if (libssh2_channel_eof(channel.get()))
-                {
-                    LOG_INFO("SSH channel EOF");
-                    connected = false;
-                    break;
-                }
-            }
-        }
-        catch (const std::exception& e)
-        {
-            LOG_ERROR("Exception in SSH->slave forwarder: {}", e.what());
-            connected = false;
-        }
-
-        LOG_INFO("SSH->slave forwarding coroutine terminated");
-    }
-
     SshPtyConfig config;
     net::any_io_executor executor;
-    boost::asio::posix::stream_descriptor masterStream;
-    boost::asio::posix::stream_descriptor slaveStream;
     tcp::socket sshSocket;
-    FileDescriptor masterFd;
-    FileDescriptor slaveFd;
-    std::string slaveName;
     Ssh2SessionPtr session;
     Ssh2ChannelPtr channel;
     Ssh2Library ssh2Lib;
@@ -793,3 +615,5 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
 thread_local SshPtyDevice* SshPtyDevice::current_instance_ = nullptr;
 
 } // namespace NSNAME
+
+// Made with Bob
