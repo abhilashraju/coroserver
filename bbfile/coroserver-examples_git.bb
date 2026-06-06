@@ -19,6 +19,7 @@ DEPENDS = " \
     zlib \
     sdeventplus \
     sdbusplus \
+    libssh2 \
 "
 
 PACKAGECONFIG ??= "spdm"
@@ -30,6 +31,7 @@ PACKAGES =+ " \
     ${PN}-graphql \
     ${PN}-tcp-server \
     ${PN}-lldp-discoverd \
+    ${PN}-redfishproxy \
 "
 
 PACKAGES =+ "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
@@ -41,7 +43,10 @@ FILES:${PN}-console = " \
     ${bindir}/console_server \
     ${bindir}/console_client \
     ${systemd_system_unitdir}/console_server.service \
+    ${systemd_system_unitdir}/obmc-console-ssh@2202.service \
     ${sysconfdir}/obmc-console-multi.conf \
+    ${sysconfdir}/obmc-console/obmc-console-ssh-remote.conf \
+    ${sysconfdir}/obmc-console/sshd.2202.conf \
 "
 
 FILES:${PN}-graphql = " \
@@ -59,6 +64,11 @@ FILES:${PN}-lldp-discoverd = " \
     ${systemd_system_unitdir}/lldp_discoverd.service \
 "
 
+FILES:${PN}-redfishproxy = " \
+    ${bindir}/redfishproxy \
+    ${systemd_system_unitdir}/redfishproxy.service \
+"
+
 FILES:${PN}-spdm = " \
     ${bindir}/spdm_responder \
     ${bindir}/spdm_requester \
@@ -73,12 +83,14 @@ FILES:${PN}-dev = " \
     ${libdir}/pkgconfig/reactor.pc \
 "
 
-SYSTEMD_PACKAGES = "${PN}-lldp-discoverd"
+SYSTEMD_PACKAGES = "${PN}-lldp-discoverd ${PN}-redfishproxy"
 SYSTEMD_PACKAGES += "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
 
 SYSTEMD_SERVICE:${PN}-lldp-discoverd = "lldp_discoverd.service"
+SYSTEMD_SERVICE:${PN}-redfishproxy = "redfishproxy.service"
 SYSTEMD_SERVICE:${PN}-spdm = "xyz.openbmc_project.spdm.responder.service xyz.openbmc_project.spdm.requester.service"
 
 RDEPENDS:${PN}-lldp-discoverd += "systemd"
+RDEPENDS:${PN}-redfishproxy += "systemd"
 RDEPENDS:${PN}-spdm += "systemd"
 #PACKAGECONFIG:remove:pn-coroserver-examples = "spdm"

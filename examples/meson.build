@@ -22,6 +22,7 @@ endif
 # subdir('mctp_requester')
 # subdir('mctp_responder')
 subdir('lldp_discoverd')
+subdir('redfishproxy')
 
 # systemd = dependency('systemd',required: false)
 # if sdbusplus_dep.found() and systemd.found()
