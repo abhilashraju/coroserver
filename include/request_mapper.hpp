@@ -41,4 +41,4 @@ struct request_mapper
         return first.path < second.path;
     }
 };
-}
+} // namespace NSNAME

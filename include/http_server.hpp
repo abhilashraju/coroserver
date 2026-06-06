@@ -52,6 +52,9 @@ struct HttpRouter
             return func(req, params);
         }
     };
+
+    // Fallback handler storage
+    std::unique_ptr<handler_base> fallback_handler;
     void setIoContext(std::reference_wrapper<net::io_context> ctx)
     {
         ioc = ctx;
@@ -90,8 +93,15 @@ struct HttpRouter
     template <AwaitableResponseHandler FUNC>
     void add_delete_handler(std::string_view path, FUNC&& h)
     {
-        add_handler({{path.data(), path.length()}, http::verb::delete_}, path,
+        add_handler({{path.data(), path.length()}, http::verb::delete_},
                     (FUNC&&)h);
+    }
+
+    // Set a fallback handler that will be called when no route matches
+    template <AwaitableResponseHandler FUNC>
+    void set_fallback_handler(FUNC&& h)
+    {
+        fallback_handler = std::make_unique<handler<FUNC>>(std::move(h));
     }
 
     HANDLER_MAP& handler_for_verb(http::verb v)
@@ -123,6 +133,12 @@ struct HttpRouter
             extract_params_from_path(httpfunc, iter->first.path,
                                      httpfunc.name());
             co_return co_await iter->second->handle(reqVariant, httpfunc);
+        }
+
+        // If no route matched, try fallback handler
+        if (fallback_handler)
+        {
+            co_return co_await fallback_handler->handle(reqVariant, httpfunc);
         }
 
         co_return make_error_response(reqVariant, httpfunc.name());
@@ -241,4 +257,4 @@ class HttpServer
     Accepter& acceptor_;
     HttpRouter& router_;
 };
-}
+} // namespace NSNAME

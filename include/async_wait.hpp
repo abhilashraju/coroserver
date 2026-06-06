@@ -80,5 +80,3 @@ inline net::awaitable<boost::system::error_code> waitFor(
 }
 
 } // namespace NSNAME
-
-// Made with Bob

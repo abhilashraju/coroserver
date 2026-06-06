@@ -101,5 +101,3 @@ class FileDescriptor
 };
 
 } // namespace NSNAME
-
-// Made with Bob

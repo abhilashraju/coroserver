@@ -1,0 +1,12 @@
+[Unit]
+Description=Redfish Proxy Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/redfishproxy -p 8443
+Restart=always
+RestartSec=5
+Type=simple
+
+[Install]
+WantedBy=multi-user.target
