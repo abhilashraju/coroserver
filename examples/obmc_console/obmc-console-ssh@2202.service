@@ -1,0 +1,18 @@
+[Unit]
+Description=Console Client on port %i for Remote SSH Console
+Wants=sshdgenkeys.service console_server.service
+After=sshdgenkeys.service console_server.service
+
+[Service]
+# Service for SSH access to remote console via console_client
+Environment="SSHD_OPTS="
+EnvironmentFile=-/etc/default/ssh
+# Start sshd on port %i with console_client connecting to remote socket
+ExecStart=-/usr/sbin/sshd $SSHD_OPTS -f /etc/obmc-console/sshd.%i.conf -p %i
+SyslogIdentifier=console-client-%i
+KillMode=process
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

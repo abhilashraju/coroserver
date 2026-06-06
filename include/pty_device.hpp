@@ -1,5 +1,6 @@
 #pragma once
 #include "beastdefs.hpp"
+#include "file_descriptor.hpp"
 #include "logger.hpp"
 
 #include <fcntl.h>
@@ -41,7 +42,7 @@ class PtyDevice
 {
   public:
     PtyDevice(net::any_io_executor io_context, const PtyConfig& config) :
-        config_(config), stream_(io_context), master_fd_(-1), slave_fd_(-1),
+        config_(config), stream_(io_context), master_fd_(), slave_fd_(),
         shell_pid_(-1)
     {}
 
@@ -59,15 +60,19 @@ class PtyDevice
         char slave_name[256];
 
         // Create pseudo-terminal pair
-        if (openpty(&master_fd_, &slave_fd_, slave_name, nullptr, nullptr) < 0)
+        int master_tmp, slave_tmp;
+        if (openpty(&master_tmp, &slave_tmp, slave_name, nullptr, nullptr) < 0)
         {
             LOG_ERROR("Failed to create PTY pair");
             return boost::system::error_code(errno,
                                              boost::system::system_category());
         }
 
+        master_fd_.reset(master_tmp);
+        slave_fd_.reset(slave_tmp);
+
         slave_name_ = slave_name;
-        LOG_INFO("PTY pair created: master_fd={}, slave={}", master_fd_,
+        LOG_INFO("PTY pair created: master_fd={}, slave={}", master_fd_.get(),
                  slave_name_);
 
         // Spawn shell if configured
@@ -76,16 +81,12 @@ class PtyDevice
             auto ec = spawnShell();
             if (ec)
             {
-                ::close(master_fd_);
-                ::close(slave_fd_);
-                master_fd_ = -1;
-                slave_fd_ = -1;
                 return ec;
             }
         }
 
         // Assign the master file descriptor to the stream
-        stream_.assign(master_fd_);
+        stream_.assign(master_fd_.get());
 
         LOG_INFO("PTY device opened successfully");
         return boost::system::error_code{};
@@ -96,17 +97,9 @@ class PtyDevice
      */
     void close()
     {
-        if (master_fd_ != -1)
+        if (master_fd_.isValid())
         {
             stream_.release();
-            ::close(master_fd_);
-            master_fd_ = -1;
-
-            if (slave_fd_ != -1)
-            {
-                ::close(slave_fd_);
-                slave_fd_ = -1;
-            }
 
             // Terminate shell process if running
             if (shell_pid_ > 0)
@@ -135,6 +128,10 @@ class PtyDevice
 
                 shell_pid_ = -1;
             }
+
+            // RAII wrappers automatically clean up file descriptors
+            master_fd_.reset();
+            slave_fd_.reset();
 
             LOG_INFO("PTY device closed");
         }
@@ -185,7 +182,7 @@ class PtyDevice
      */
     bool isOpen() const
     {
-        return master_fd_ != -1 && stream_.is_open();
+        return master_fd_.isValid() && stream_.is_open();
     }
 
     /**
@@ -230,7 +227,7 @@ class PtyDevice
         if (shell_pid_ == 0)
         {
             // Child process
-            ::close(master_fd_); // Child doesn't need master
+            master_fd_.reset(); // Child doesn't need master
 
             // Create new session and make slave the controlling terminal
             if (setsid() < 0)
@@ -239,22 +236,22 @@ class PtyDevice
                 exit(1);
             }
 
-            if (ioctl(slave_fd_, TIOCSCTTY, 0) < 0)
+            if (ioctl(slave_fd_.get(), TIOCSCTTY, 0) < 0)
             {
                 perror("ioctl TIOCSCTTY");
                 exit(1);
             }
 
             // Redirect stdin/stdout/stderr to slave
-            if (dup2(slave_fd_, STDIN_FILENO) < 0 ||
-                dup2(slave_fd_, STDOUT_FILENO) < 0 ||
-                dup2(slave_fd_, STDERR_FILENO) < 0)
+            if (dup2(slave_fd_.get(), STDIN_FILENO) < 0 ||
+                dup2(slave_fd_.get(), STDOUT_FILENO) < 0 ||
+                dup2(slave_fd_.get(), STDERR_FILENO) < 0)
             {
                 perror("dup2");
                 exit(1);
             }
 
-            ::close(slave_fd_);
+            slave_fd_.reset(); // Close slave after duplication
 
             // Set environment variables
             for (const auto& [key, value] : config_.env)
@@ -280,8 +277,7 @@ class PtyDevice
         }
 
         // Parent process
-        ::close(slave_fd_); // Parent doesn't need slave
-        slave_fd_ = -1;
+        slave_fd_.reset(); // Parent doesn't need slave
 
         LOG_INFO("Shell spawned: {} (PID: {})", config_.shellPath, shell_pid_);
 
@@ -290,8 +286,8 @@ class PtyDevice
 
     PtyConfig config_;
     net::posix::stream_descriptor stream_;
-    int master_fd_;
-    int slave_fd_;
+    FileDescriptor master_fd_;
+    FileDescriptor slave_fd_;
     pid_t shell_pid_;
     std::string slave_name_;
 };

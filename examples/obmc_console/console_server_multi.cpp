@@ -19,9 +19,12 @@
 #include "console_dbus.hpp"
 #include "logger.hpp"
 #include "pty_device.hpp"
+#include "ssh_pty_device_libssh2.hpp"
 #include "tcp_server.hpp"
 #include "uart_server.hpp"
 
+#include <grp.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <boost/asio/local/stream_protocol.hpp>
@@ -102,10 +105,11 @@ class ConsoleRouter
   public:
     ConsoleRouter(net::any_io_executor io_context, RingBuffer& ringBuffer,
                   std::unique_ptr<UartDevice>& uart,
-                  std::unique_ptr<PtyDevice>& pty, const std::string& name,
-                  std::stop_token stopToken) :
+                  std::unique_ptr<PtyDevice>& pty,
+                  std::unique_ptr<SshPtyDevice>& sshPty,
+                  const std::string& name, std::stop_token stopToken) :
         io_context_(io_context), ringBuffer_(ringBuffer), uart_(uart),
-        pty_(pty), consoleName_(name), stopToken_(stopToken)
+        pty_(pty), sshPty_(sshPty), consoleName_(name), stopToken_(stopToken)
     {}
 
     /**
@@ -222,7 +226,7 @@ class ConsoleRouter
                 std::vector<char> data(buffer.begin(),
                                        buffer.begin() + bytesRead);
 
-                // Write to UART or PTY device
+                // Write to UART, PTY, or SSH PTY device
                 if (uart_ && uart_->isOpen())
                 {
                     boost::asio::co_spawn(
@@ -240,6 +244,16 @@ class ConsoleRouter
                         [this,
                          data = std::move(data)]() -> net::awaitable<void> {
                             co_await pty_->write(boost::asio::buffer(data));
+                        },
+                        boost::asio::detached);
+                }
+                else if (sshPty_ && sshPty_->isOpen())
+                {
+                    boost::asio::co_spawn(
+                        io_context_,
+                        [this,
+                         data = std::move(data)]() -> net::awaitable<void> {
+                            co_await sshPty_->write(boost::asio::buffer(data));
                         },
                         boost::asio::detached);
                 }
@@ -311,6 +325,7 @@ class ConsoleRouter
     std::vector<int> fdsToClose_;
     std::unique_ptr<UartDevice>& uart_;
     std::unique_ptr<PtyDevice>& pty_;
+    std::unique_ptr<SshPtyDevice>& sshPty_;
     std::string consoleName_;
     std::stop_token stopToken_;
 };
@@ -326,22 +341,26 @@ class ConsoleInstance
                     std::shared_ptr<sdbusplus::asio::connection> sharedBus,
                     std::stop_token stopToken) :
         io_context_(io_context), deviceConfig_(deviceConfig),
-        acceptor_(io_context, deviceConfig.socketPath),
+        acceptor_(io_context, deviceConfig.getSocketPath()),
         ringBuffer_(128 * 1024), // 128KB buffer
-        router_(io_context, ringBuffer_, uart_, pty_, deviceConfig.name,
-                stopToken),
+        router_(io_context, ringBuffer_, uart_, pty_, sshPty_,
+                deviceConfig.getName(), stopToken),
         server_(io_context, acceptor_, router_), bus_(sharedBus),
         stopToken_(stopToken)
     {}
 
     boost::system::error_code start()
     {
-        LOG_INFO("[{}] Unix socket created: {}", deviceConfig_.name,
-                 deviceConfig_.socketPath);
-        LOG_INFO("[{}] Device: {} (type: {})", deviceConfig_.name,
-                 deviceConfig_.device, getDeviceTypeString());
-        LOG_INFO("[{}] Baud rate: {}", deviceConfig_.name,
-                 deviceConfig_.baudRate);
+        LOG_INFO("[{}] Unix socket created: {}", deviceConfig_.getName(),
+                 deviceConfig_.getSocketPath());
+        LOG_INFO("[{}] Device: {} (type: {})", deviceConfig_.getName(),
+                 deviceConfig_.getDevice(),
+                 deviceConfig_.getDeviceTypeString());
+        LOG_INFO("[{}] Baud rate: {}", deviceConfig_.getName(),
+                 deviceConfig_.getBaudRate());
+
+        // Apply socket permissions
+        applySocketPermissions();
 
         // Initialize D-Bus interface (creates its own connection)
         initializeDbusInterface();
@@ -363,52 +382,27 @@ class ConsoleInstance
         {
             pty_->close();
         }
-        LOG_INFO("[{}] Console stopped", deviceConfig_.name);
+        if (sshPty_)
+        {
+            sshPty_->close();
+        }
+        LOG_INFO("[{}] Console stopped", deviceConfig_.getName());
     }
 
     const std::string& getName() const
     {
-        return deviceConfig_.name;
+        return deviceConfig_.getName();
     }
 
-  private:
-    std::string getDeviceTypeString() const
-    {
-        switch (deviceConfig_.type)
-        {
-            case DeviceType::UART:
-                return "UART";
-            case DeviceType::VUART:
-                return "VUART";
-            case DeviceType::PTY:
-                return "PTY";
-            default:
-                return "Unknown";
-        }
-    }
-
-    /**
-     * @brief Device handler function type
-     */
-    using DeviceHandler = std::function<net::awaitable<void>()>;
-
-    /**
-     * @brief Device handler table entry
-     */
-    struct DeviceHandlerEntry
-    {
-        DeviceType type;
-        DeviceHandler handler;
-    };
-
+  public:
     /**
      * @brief Initialize UART/VUART device
      */
     net::awaitable<void> initUartDevice()
     {
         UartConfig uartConfig;
-        uartConfig.device = deviceConfig_.device;
-        uartConfig.baudRate = parseBaudRate(deviceConfig_.baudRate);
+        uartConfig.device = deviceConfig_.getDevice();
+        uartConfig.baudRate = parseBaudRate(deviceConfig_.getBaudRate());
         uartConfig.rawMode = true;
         uartConfig.enableParity = false;
         uartConfig.stopBits = 1;
@@ -420,18 +414,21 @@ class ConsoleInstance
         auto ec = uart_->open();
         if (ec)
         {
-            LOG_ERROR("[{}] Failed to open device: {}", deviceConfig_.name,
+            LOG_ERROR("[{}] Failed to open device: {}", deviceConfig_.getName(),
                       ec.message());
             co_return;
         }
 
-        LOG_INFO("[{}] Device opened successfully", deviceConfig_.name);
+        LOG_INFO("[{}] Device opened successfully", deviceConfig_.getName());
 
         // Configure VUART-specific sysfs attributes if this is a VUART device
-        if (deviceConfig_.type == DeviceType::VUART)
-        {
-            configureVuartSysfs();
-        }
+        deviceConfig_.visit([this](const auto& config) {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, ConsoleVuartConfig>)
+            {
+                configureVuartSysfs();
+            }
+        });
 
         co_await deviceReadLoop(
             [this](auto buffer)
@@ -440,7 +437,7 @@ class ConsoleInstance
                 co_return co_await uart_->read(buffer);
             });
 
-        LOG_INFO("[{}] Device handler stopped", deviceConfig_.name);
+        LOG_INFO("[{}] Device handler stopped", deviceConfig_.getName());
     }
 
     /**
@@ -448,11 +445,17 @@ class ConsoleInstance
      */
     net::awaitable<void> initPtyDevice()
     {
+        const auto* ptyConf = deviceConfig_.getPtyConfig();
+        if (!ptyConf)
+        {
+            LOG_ERROR("[{}] Invalid PTY configuration",
+                      deviceConfig_.getName());
+            co_return;
+        }
+
         PtyConfig ptyConfig;
-        ptyConfig.shellPath = deviceConfig_.shellPath.empty()
-                                  ? "/bin/sh"
-                                  : deviceConfig_.shellPath;
-        ptyConfig.shellArgs = deviceConfig_.shellArgs;
+        ptyConfig.shellPath = ptyConf->shellPath;
+        ptyConfig.shellArgs = ptyConf->shellArgs;
         ptyConfig.spawnShell = true;
 
         pty_ = std::make_unique<PtyDevice>(io_context_, ptyConfig);
@@ -460,17 +463,17 @@ class ConsoleInstance
         auto ec = pty_->open();
         if (ec)
         {
-            LOG_ERROR("[{}] Failed to open PTY: {}", deviceConfig_.name,
+            LOG_ERROR("[{}] Failed to open PTY: {}", deviceConfig_.getName(),
                       ec.message());
             co_return;
         }
 
-        LOG_INFO("[{}] PTY opened successfully: {}", deviceConfig_.name,
+        LOG_INFO("[{}] PTY opened successfully: {}", deviceConfig_.getName(),
                  pty_->getSlaveName());
         if (pty_->getShellPid() > 0)
         {
-            LOG_INFO("[{}] Shell process started (PID: {})", deviceConfig_.name,
-                     pty_->getShellPid());
+            LOG_INFO("[{}] Shell process started (PID: {})",
+                     deviceConfig_.getName(), pty_->getShellPid());
         }
 
         co_await deviceReadLoop(
@@ -480,39 +483,70 @@ class ConsoleInstance
                 co_return co_await pty_->read(buffer);
             });
 
-        LOG_INFO("[{}] PTY handler stopped", deviceConfig_.name);
+        LOG_INFO("[{}] PTY handler stopped", deviceConfig_.getName());
     }
 
     /**
-     * @brief Get device handler table
+     * @brief Initialize SSH PTY device
      */
-    std::vector<DeviceHandlerEntry> getDeviceHandlerTable()
+    net::awaitable<void> initSshPtyDevice()
     {
-        return {{DeviceType::UART, [this]() { return initUartDevice(); }},
-                {DeviceType::VUART, [this]() { return initUartDevice(); }},
-                {DeviceType::PTY, [this]() { return initPtyDevice(); }}};
+        const auto* sshConf = deviceConfig_.getSshPtyConfig();
+        if (!sshConf)
+        {
+            LOG_ERROR("[{}] Invalid SSH PTY configuration",
+                      deviceConfig_.getName());
+            co_return;
+        }
+
+        SshPtyConfig sshConfig;
+        sshConfig.remoteHost = sshConf->remoteHost;
+        sshConfig.remoteUser = sshConf->remoteUser;
+        sshConfig.remotePassword = sshConf->remotePassword;
+        sshConfig.sshKeyPath = sshConf->sshKeyPath;
+        sshConfig.remotePort = sshConf->remotePort;
+        sshConfig.remoteShell = sshConf->remoteShell;
+        sshConfig.connectTimeout = sshConf->connectTimeout;
+
+        sshPty_ = std::make_unique<SshPtyDevice>(io_context_, sshConfig);
+
+        auto ec = sshPty_->open();
+        if (ec)
+        {
+            LOG_ERROR("[{}] Failed to open SSH PTY: {}",
+                      deviceConfig_.getName(), ec.message());
+            co_return;
+        }
+
+        LOG_INFO("[{}] SSH PTY opened successfully: {}",
+                 deviceConfig_.getName(), sshPty_->getConnectionInfo());
+        if (sshPty_->getSshPid() > 0)
+        {
+            LOG_INFO("[{}] SSH process started (PID: {})",
+                     deviceConfig_.getName(), sshPty_->getSshPid());
+        }
+
+        co_await deviceReadLoop(
+            [this](auto buffer)
+                -> net::awaitable<
+                    std::pair<boost::system::error_code, std::size_t>> {
+                co_return co_await sshPty_->read(buffer);
+            });
+
+        LOG_INFO("[{}] SSH PTY handler stopped", deviceConfig_.getName());
     }
 
+  private:
     /**
-     * @brief Main device handler using table-driven approach
+     * @brief Main device handler using std::visit pattern with delegated
+     * handling
      */
     net::awaitable<void> handleDevice()
     {
-        auto handlerTable = getDeviceHandlerTable();
-
-        // Find handler for current device type
-        for (const auto& entry : handlerTable)
-        {
-            if (entry.type == deviceConfig_.type)
-            {
-                co_await entry.handler();
-                co_return;
-            }
-        }
-
-        // No handler found for device type
-        LOG_ERROR("[{}] No handler found for device type: {}",
-                  deviceConfig_.name, getDeviceTypeString());
+        // Delegate to the config type's handle() method
+        co_await deviceConfig_.visit([this](const auto& config) {
+            return config.handle(this);
+        });
     }
 
     template <typename ReadFunc>
@@ -530,8 +564,8 @@ class ConsoleInstance
             {
                 if (readEc != boost::asio::error::operation_aborted)
                 {
-                    LOG_ERROR("[{}] Device read error: {}", deviceConfig_.name,
-                              readEc.message());
+                    LOG_ERROR("[{}] Device read error: {}",
+                              deviceConfig_.getName(), readEc.message());
                 }
                 break;
             }
@@ -555,41 +589,98 @@ class ConsoleInstance
      */
     void configureVuartSysfs()
     {
-        LOG_INFO("[{}] Configuring VUART sysfs attributes", deviceConfig_.name);
+        const auto* vuartConf = deviceConfig_.getVuartConfig();
+        if (!vuartConf)
+        {
+            LOG_ERROR("[{}] Invalid VUART configuration",
+                      deviceConfig_.getName());
+            return;
+        }
+
+        LOG_INFO("[{}] Configuring VUART sysfs attributes",
+                 deviceConfig_.getName());
 
         // Parse and configure LPC address
-        if (!deviceConfig_.lpcAddress.empty())
+        if (!vuartConf->lpcAddress.empty())
         {
             try
             {
                 // Parse hex string (e.g., "0x3f8")
                 uint16_t lpcAddr = static_cast<uint16_t>(
-                    std::stoul(deviceConfig_.lpcAddress, nullptr, 0));
+                    std::stoul(vuartConf->lpcAddress, nullptr, 0));
                 auto ec =
                     uart_->configureSysfsAttribute("lpc_address", lpcAddr);
                 if (ec)
                 {
                     LOG_WARNING("[{}] Failed to configure lpc_address: {}",
-                                deviceConfig_.name, ec.message());
+                                deviceConfig_.getName(), ec.message());
                 }
             }
             catch (const std::exception& e)
             {
                 LOG_ERROR("[{}] Invalid lpc_address value '{}': {}",
-                          deviceConfig_.name, deviceConfig_.lpcAddress,
+                          deviceConfig_.getName(), vuartConf->lpcAddress,
                           e.what());
             }
         }
 
         // Configure SIRQ
-        if (deviceConfig_.sirq > 0)
+        if (vuartConf->sirq > 0)
         {
             auto ec = uart_->configureSysfsAttribute(
-                "sirq", static_cast<uint16_t>(deviceConfig_.sirq));
+                "sirq", static_cast<uint16_t>(vuartConf->sirq));
             if (ec)
             {
                 LOG_WARNING("[{}] Failed to configure sirq: {}",
-                            deviceConfig_.name, ec.message());
+                            deviceConfig_.getName(), ec.message());
+            }
+        }
+    }
+
+    /**
+     * @brief Apply socket file permissions and group ownership
+     */
+    void applySocketPermissions()
+    {
+        const std::string& socketPath = deviceConfig_.getSocketPath();
+
+        // Apply socket mode (file permissions)
+        if (::chmod(socketPath.c_str(), deviceConfig_.base.socketMode) != 0)
+        {
+            LOG_ERROR("[{}] Failed to set socket permissions to {:o}: {}",
+                      deviceConfig_.getName(), deviceConfig_.base.socketMode,
+                      strerror(errno));
+        }
+        else
+        {
+            LOG_INFO("[{}] Socket permissions set to {:o}",
+                     deviceConfig_.getName(), deviceConfig_.base.socketMode);
+        }
+
+        // Apply socket group ownership if specified
+        if (!deviceConfig_.base.socketGroup.empty())
+        {
+            struct group* grp =
+                getgrnam(deviceConfig_.base.socketGroup.c_str());
+            if (grp == nullptr)
+            {
+                LOG_ERROR("[{}] Failed to find group '{}': {}",
+                          deviceConfig_.getName(),
+                          deviceConfig_.base.socketGroup, strerror(errno));
+                return;
+            }
+
+            if (::chown(socketPath.c_str(), -1, grp->gr_gid) != 0)
+            {
+                LOG_ERROR("[{}] Failed to set socket group to '{}': {}",
+                          deviceConfig_.getName(),
+                          deviceConfig_.base.socketGroup, strerror(errno));
+            }
+            else
+            {
+                LOG_INFO("[{}] Socket group set to '{}'",
+                         deviceConfig_.getName(),
+                         deviceConfig_.base.socketGroup);
             }
         }
     }
@@ -601,16 +692,19 @@ class ConsoleInstance
         {
             LOG_WARNING(
                 "[{}] No D-Bus connection available - running without D-Bus support",
-                deviceConfig_.name);
+                deviceConfig_.getName());
             return;
         }
 
         auto getBaud = [this]() -> speed_t {
-            return parseBaudRate(deviceConfig_.baudRate);
+            return parseBaudRate(deviceConfig_.getBaudRate());
         };
 
         auto setBaud = [this](speed_t baud) {
-            deviceConfig_.baudRate = baudRateToInt(baud);
+            // Note: Cannot modify const deviceConfig_, would need mutable
+            // reference For now, just log the change
+            LOG_INFO("[{}] Baud rate change requested to: {}",
+                     deviceConfig_.getName(), baudRateToInt(baud));
             if (uart_ && uart_->isOpen())
             {
                 // Reconfigure UART with new baud rate
@@ -619,18 +713,19 @@ class ConsoleInstance
                 if (ec)
                 {
                     LOG_ERROR("[{}] Failed to reopen device with new baud: {}",
-                              deviceConfig_.name, ec.message());
+                              deviceConfig_.getName(), ec.message());
                 }
             }
         };
 
         dbusInterface_ = std::make_unique<ConsoleDbusInterface<ConsoleRouter>>(
-            io_context_, bus_, deviceConfig_.name, getBaud, setBaud, router_);
+            io_context_, bus_, deviceConfig_.getName(), getBaud, setBaud,
+            router_);
 
         if (!dbusInterface_->initialize())
         {
             LOG_ERROR("[{}] Failed to initialize D-Bus interface",
-                      deviceConfig_.name);
+                      deviceConfig_.getName());
             dbusInterface_.reset();
         }
     }
@@ -684,6 +779,7 @@ class ConsoleInstance
     RingBuffer ringBuffer_;
     std::unique_ptr<UartDevice> uart_;
     std::unique_ptr<PtyDevice> pty_;
+    std::unique_ptr<SshPtyDevice> sshPty_;
     ConsoleRouter router_;
     TcpServer<UnixStreamTypePlain, ConsoleRouter> server_;
     std::shared_ptr<sdbusplus::asio::connection> bus_;
@@ -730,7 +826,7 @@ class MultiConsoleServer
         for (const auto& deviceConfig : config_.devices)
         {
             // Remove existing socket file
-            ::unlink(deviceConfig.socketPath.c_str());
+            ::unlink(deviceConfig.getSocketPath().c_str());
             auto instance = std::make_unique<ConsoleInstance>(
                 io_context_, deviceConfig, sharedBus_,
                 globalStopSource.get_token());
@@ -738,13 +834,13 @@ class MultiConsoleServer
             auto ec = instance->start();
             if (ec)
             {
-                LOG_ERROR("Failed to start console {}: {}", deviceConfig.name,
-                          ec.message());
+                LOG_ERROR("Failed to start console {}: {}",
+                          deviceConfig.getName(), ec.message());
                 continue;
             }
 
             instances_.push_back(std::move(instance));
-            LOG_INFO("Console {} started successfully", deviceConfig.name);
+            LOG_INFO("Console {} started successfully", deviceConfig.getName());
         }
 
         if (instances_.empty())
