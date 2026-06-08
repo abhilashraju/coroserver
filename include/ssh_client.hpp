@@ -59,7 +59,7 @@ using Ssh2SessionPtr = std::unique_ptr<LIBSSH2_SESSION, Ssh2SessionDeleter>;
 class Ssh2Library
 {
   public:
-    Ssh2Library() : initialized_(false) {}
+    Ssh2Library() : initialized(false) {}
 
     ~Ssh2Library()
     {
@@ -71,9 +71,9 @@ class Ssh2Library
     Ssh2Library& operator=(const Ssh2Library&) = delete;
 
     // Movable
-    Ssh2Library(Ssh2Library&& other) noexcept : initialized_(other.initialized_)
+    Ssh2Library(Ssh2Library&& other) noexcept : initialized(other.initialized)
     {
-        other.initialized_ = false;
+        other.initialized = false;
     }
 
     Ssh2Library& operator=(Ssh2Library&& other) noexcept
@@ -81,20 +81,20 @@ class Ssh2Library
         if (this != &other)
         {
             cleanup();
-            initialized_ = other.initialized_;
-            other.initialized_ = false;
+            initialized = other.initialized;
+            other.initialized = false;
         }
         return *this;
     }
 
     int init()
     {
-        if (!initialized_)
+        if (!initialized)
         {
             int rc = libssh2_init(0);
             if (rc == 0)
             {
-                initialized_ = true;
+                initialized = true;
             }
             return rc;
         }
@@ -103,125 +103,100 @@ class Ssh2Library
 
     bool isInitialized() const
     {
-        return initialized_;
+        return initialized;
     }
 
   private:
     void cleanup()
     {
-        if (initialized_)
+        if (initialized)
         {
             libssh2_exit();
-            initialized_ = false;
+            initialized = false;
         }
     }
 
-    bool initialized_;
+    bool initialized;
 };
 
 /**
- * @brief SSH PTY configuration structure for remote connections
+ * @brief SSH connection configuration structure
  */
-struct SshPtyConfig
+struct SshConfig
 {
-    std::string remoteHost;                 // Remote host IP/hostname
-    std::string remoteUser;                 // SSH username
-    std::string remotePassword;             // SSH password (optional)
-    std::string sshKeyPath;                 // SSH private key path (optional)
-    std::string sshKeyPassphrase;           // Key passphrase (optional)
-    int remotePort = 22;                    // SSH port
-    std::string remoteShell = "/bin/bash";  // Shell to run on remote
-    std::map<std::string, std::string> env; // Environment variables
-    int connectTimeout = 30;                // Connection timeout in seconds
-    bool verifyHostKey = false;             // Verify host key (default: no)
+    std::string remoteHost;       // Remote host IP/hostname
+    std::string remoteUser;       // SSH username
+    std::string remotePassword;   // SSH password (optional)
+    std::string sshKeyPath;       // SSH private key path (optional)
+    std::string sshKeyPassphrase; // Key passphrase (optional)
+    int remotePort = 22;          // SSH port
+    int connectTimeout = 30;      // Connection timeout in seconds
+    bool verifyHostKey = false;   // Verify host key (default: no)
 
-    SshPtyConfig()
-    {
-        // Default environment
-        env["TERM"] = "xterm-256color";
-    }
+    SshConfig() = default;
 };
 
 /**
- * @brief SSH PTY device using libssh2 - connects to remote machine via SSH
+ * @brief SSH Client - manages SSH connection and session
  *
- * This device uses libssh2 to establish SSH connections programmatically,
- * supporting both password and key-based authentication. It reads data
- * directly from the SSH channel and uses a callback mechanism to deliver
- * data to the server, which then broadcasts to multiple clients.
- *
- * Architecture (NO PTY master/slave):
- *   Console Clients <-> Unix Socket <-> Console Server <-> SshPtyDevice
- *                                            |                    |
- *                                       Ring Buffer          SSH Channel
- *                                            |                    |
- *                                       Broadcast            Remote Shell
- *
- * This eliminates the race condition where multiple clients compete for
- * the same PTY master stream.
+ * This class provides a reusable SSH client similar to TcpClient,
+ * handling connection, authentication, and session management.
+ * It can be used by different components that need SSH connectivity.
  */
-class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
+class SSHClient
 {
   public:
-    SshPtyDevice(net::any_io_executor io_context, const SshPtyConfig& config) :
-        config(config), executor(io_context), sshSocket(io_context), session(),
-        channel(), ssh2Lib(), connected(false)
+    SSHClient(net::any_io_executor io_context, const SshConfig& config) :
+        config(config), executor(io_context), sshSocket(io_context),
+        sshSession(), ssh2Lib(), connected(false)
     {}
 
-    ~SshPtyDevice()
+    ~SSHClient()
     {
         close();
     }
 
     /**
-     * @brief Open and configure the SSH PTY device
+     * @brief Connect and authenticate to SSH server
      * @return error_code indicating success or failure
      */
-    boost::system::error_code open()
+    net::awaitable<boost::system::error_code> connect()
     {
         // Initialize libssh2
         int rc = ssh2Lib.init();
         if (rc != 0)
         {
             LOG_ERROR("libssh2 initialization failed: {}", rc);
-            return boost::system::error_code(ECONNREFUSED,
-                                             boost::system::system_category());
+            co_return boost::system::error_code(
+                ECONNREFUSED, boost::system::system_category());
         }
 
         // Connect to remote host
-        auto ec = connectToHost();
+        auto ec = co_await connectToHost();
         if (ec)
         {
-            return ec;
+            co_return ec;
         }
 
         // Authenticate
         ec = authenticate();
         if (ec)
         {
-            return ec;
-        }
-
-        // Open shell channel
-        ec = openShellChannel();
-        if (ec)
-        {
-            return ec;
+            co_return ec;
         }
 
         // Set non-blocking mode
-        libssh2_session_set_blocking(session.get(), 0);
+        libssh2_session_set_blocking(sshSession.get(), 0);
 
-        // Device is ready - server will call read() to get data
         connected = true;
 
-        LOG_INFO("SSH PTY device opened successfully, connected to {}@{}:{}",
+        LOG_INFO("SSH client connected successfully to {}@{}:{}",
                  config.remoteUser, config.remoteHost, config.remotePort);
-        return boost::system::error_code{};
+        co_return boost::system::error_code{};
     }
 
     /**
-     * @brief Close the SSH PTY device
+     * @brief Close the SSH connection
      */
     void close()
     {
@@ -238,20 +213,20 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
             }
         }
 
-        // RAII wrappers automatically clean up resources in correct order
-        channel.reset();
-        session.reset();
+        // RAII wrappers automatically clean up resources
+        sshSession.reset();
 
-        LOG_INFO("SSH PTY device closed");
+        LOG_INFO("SSH client closed");
     }
 
     /**
-     * @brief Async read from SSH channel (for server's deviceReadLoop)
+     * @brief Async read from SSH channel
+     * @param channel SSH channel to read from
      * @param buffer Buffer to read into
      * @return Pair of error_code and bytes read
      */
     net::awaitable<std::pair<boost::system::error_code, std::size_t>> read(
-        net::mutable_buffer buffer)
+        LIBSSH2_CHANNEL* channel, net::mutable_buffer buffer)
     {
         // Wait for SSH socket to become readable
         auto [wait_ec] = co_await sshSocket.async_wait(
@@ -267,7 +242,7 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
         char* data = static_cast<char*>(buffer.data());
         size_t size = buffer.size();
 
-        int rc = libssh2_channel_read(channel.get(), data, size);
+        int rc = libssh2_channel_read(channel, data, size);
 
         if (rc > 0)
         {
@@ -296,11 +271,12 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
 
     /**
      * @brief Async write to SSH channel
+     * @param channel SSH channel to write to
      * @param buffer Buffer to write from
      * @return Pair of error_code and bytes written
      */
     net::awaitable<std::pair<boost::system::error_code, std::size_t>> write(
-        net::const_buffer buffer)
+        LIBSSH2_CHANNEL* channel, net::const_buffer buffer)
     {
         const char* data = static_cast<const char*>(buffer.data());
         size_t size = buffer.size();
@@ -308,7 +284,7 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
 
         while (nwritten < size && connected)
         {
-            int rc = libssh2_channel_write(channel.get(), data + nwritten,
+            int rc = libssh2_channel_write(channel, data + nwritten,
                                            size - nwritten);
             if (rc < 0)
             {
@@ -332,19 +308,11 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
     }
 
     /**
-     * @brief Check if device is open
+     * @brief Check if client is connected
      */
     bool isOpen() const
     {
         return connected && sshSocket.is_open();
-    }
-
-    /**
-     * @brief Get slave PTY name (returns empty for SSH - no PTY)
-     */
-    std::string getSlaveName() const
-    {
-        return ""; // No PTY slave in this implementation
     }
 
     /**
@@ -357,18 +325,34 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
     }
 
     /**
-     * @brief Get SSH process PID (returns 0 for libssh2 - no separate process)
+     * @brief Get the underlying TCP socket
      */
-    pid_t getSshPid() const
+    tcp::socket& socket()
     {
-        return 0; // libssh2 runs in-process
+        return sshSocket;
+    }
+
+    /**
+     * @brief Get the SSH session
+     */
+    LIBSSH2_SESSION* session()
+    {
+        return sshSession.get();
+    }
+
+    /**
+     * @brief Get the executor
+     */
+    net::any_io_executor& getExecutor()
+    {
+        return executor;
     }
 
   private:
     /**
      * @brief Connect to remote host using Boost.Asio TCP socket
      */
-    boost::system::error_code connectToHost()
+    net::awaitable<boost::system::error_code> connectToHost()
     {
         try
         {
@@ -383,51 +367,52 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
             {
                 LOG_ERROR("Failed to resolve host {}: {}", config.remoteHost,
                           ec.message());
-                return ec;
+                co_return ec;
             }
 
-            // Connect using Boost.Asio (synchronous for now, can be made async)
+            // Connect using Boost.Asio
             net::connect(sshSocket, endpoints, ec);
 
             if (ec)
             {
                 LOG_ERROR("Failed to connect to {}:{}: {}", config.remoteHost,
                           config.remotePort, ec.message());
-                return ec;
+                co_return ec;
             }
 
             LOG_INFO("Connected to {}:{}", config.remoteHost,
                      config.remotePort);
 
             // Create SSH session
-            session.reset(libssh2_session_init());
-            if (!session)
+            sshSession.reset(libssh2_session_init());
+            if (!sshSession)
             {
                 LOG_ERROR("Failed to create SSH session");
-                return boost::system::error_code(
+                co_return boost::system::error_code(
                     ENOMEM, boost::system::system_category());
             }
 
             // Start SSH handshake using socket's native handle
-            int rc = libssh2_session_handshake(session.get(),
+            int rc = libssh2_session_handshake(sshSession.get(),
                                                sshSocket.native_handle());
             if (rc != 0)
             {
                 char* errmsg;
-                libssh2_session_last_error(session.get(), &errmsg, nullptr, 0);
+                libssh2_session_last_error(sshSession.get(), &errmsg, nullptr,
+                                           0);
                 LOG_ERROR("SSH handshake failed: {} ({})", errmsg, rc);
-                return boost::system::error_code(
+                co_return boost::system::error_code(
                     ECONNREFUSED, boost::system::system_category());
             }
 
             LOG_INFO("SSH handshake completed");
-            return boost::system::error_code{};
+            co_return boost::system::error_code{};
         }
         catch (const std::exception& e)
         {
             LOG_ERROR("Exception in connectToHost: {}", e.what());
-            return boost::system::error_code(ECONNREFUSED,
-                                             boost::system::system_category());
+            co_return boost::system::error_code(
+                ECONNREFUSED, boost::system::system_category());
         }
     }
 
@@ -436,7 +421,7 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
      */
     // Keyboard-interactive authentication callback
     // Uses thread_local to pass instance pointer to static callback
-    static thread_local SshPtyDevice* current_instance_;
+    static thread_local SSHClient* currentInstance;
 
     static void kbdintCallback(
         const char* name, int name_len, const char* instruction,
@@ -444,9 +429,9 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
         const LIBSSH2_USERAUTH_KBDINT_PROMPT* prompts,
         LIBSSH2_USERAUTH_KBDINT_RESPONSE* responses, void** abstract)
     {
-        if (!current_instance_)
+        if (!currentInstance)
         {
-            LOG_ERROR("kbdintCallback: current_instance_ is null");
+            LOG_ERROR("kbdintCallback: currentInstance is null");
             return;
         }
 
@@ -464,9 +449,9 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
             }
 
             responses[i].text =
-                strdup(current_instance_->config.remotePassword.c_str());
+                strdup(currentInstance->config.remotePassword.c_str());
             responses[i].length =
-                current_instance_->config.remotePassword.length();
+                currentInstance->config.remotePassword.length();
 
             LOG_DEBUG("kbdintCallback: responding with password length={}",
                       responses[i].length);
@@ -487,14 +472,14 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
                 config.remoteUser);
 
             // Store 'this' pointer for callback access via thread_local
-            current_instance_ = this;
+            currentInstance = this;
 
             rc = libssh2_userauth_keyboard_interactive_ex(
-                session.get(), config.remoteUser.c_str(),
+                sshSession.get(), config.remoteUser.c_str(),
                 config.remoteUser.length(), &kbdintCallback);
 
             // Clear the instance pointer
-            current_instance_ = nullptr;
+            currentInstance = nullptr;
 
             if (rc == 0)
             {
@@ -503,14 +488,14 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
             }
 
             char* errmsg;
-            libssh2_session_last_error(session.get(), &errmsg, nullptr, 0);
+            libssh2_session_last_error(sshSession.get(), &errmsg, nullptr, 0);
             LOG_WARNING("Keyboard-interactive authentication failed: {} ({})",
                         errmsg, rc);
 
             // Try simple password authentication as fallback
             LOG_INFO("Attempting password authentication for user {}",
                      config.remoteUser);
-            rc = libssh2_userauth_password(session.get(),
+            rc = libssh2_userauth_password(sshSession.get(),
                                            config.remoteUser.c_str(),
                                            config.remotePassword.c_str());
             if (rc == 0)
@@ -519,7 +504,7 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
                 return boost::system::error_code{};
             }
 
-            libssh2_session_last_error(session.get(), &errmsg, nullptr, 0);
+            libssh2_session_last_error(sshSession.get(), &errmsg, nullptr, 0);
             LOG_WARNING("Password authentication failed: {} ({})", errmsg, rc);
         }
 
@@ -535,7 +520,7 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
                                          : config.sshKeyPassphrase.c_str();
 
             rc = libssh2_userauth_publickey_fromfile(
-                session.get(), config.remoteUser.c_str(), pubKeyPath.c_str(),
+                sshSession.get(), config.remoteUser.c_str(), pubKeyPath.c_str(),
                 config.sshKeyPath.c_str(), passphrase);
 
             if (rc == 0)
@@ -545,7 +530,7 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
             }
 
             char* errmsg;
-            libssh2_session_last_error(session.get(), &errmsg, nullptr, 0);
+            libssh2_session_last_error(sshSession.get(), &errmsg, nullptr, 0);
             LOG_ERROR("Public key authentication failed: {} ({})", errmsg, rc);
         }
 
@@ -554,66 +539,15 @@ class SshPtyDevice : public std::enable_shared_from_this<SshPtyDevice>
                                          boost::system::system_category());
     }
 
-    /**
-     * @brief Open shell channel
-     */
-    boost::system::error_code openShellChannel()
-    {
-        // Open a channel
-        channel.reset(libssh2_channel_open_session(session.get()));
-        if (!channel)
-        {
-            char* errmsg;
-            libssh2_session_last_error(session.get(), &errmsg, nullptr, 0);
-            LOG_ERROR("Failed to open SSH channel: {}", errmsg);
-            return boost::system::error_code(ECONNREFUSED,
-                                             boost::system::system_category());
-        }
-
-        // Request a PTY
-        int rc = libssh2_channel_request_pty(channel.get(), "xterm");
-        if (rc != 0)
-        {
-            char* errmsg;
-            libssh2_session_last_error(session.get(), &errmsg, nullptr, 0);
-            LOG_ERROR("Failed to request PTY: {} ({})", errmsg, rc);
-            return boost::system::error_code(ECONNREFUSED,
-                                             boost::system::system_category());
-        }
-
-        // Set environment variables
-        for (const auto& [key, value] : config.env)
-        {
-            libssh2_channel_setenv(channel.get(), key.c_str(), value.c_str());
-        }
-
-        // Start shell
-        rc = libssh2_channel_shell(channel.get());
-        if (rc != 0)
-        {
-            char* errmsg;
-            libssh2_session_last_error(session.get(), &errmsg, nullptr, 0);
-            LOG_ERROR("Failed to start shell: {} ({})", errmsg, rc);
-            return boost::system::error_code(ECONNREFUSED,
-                                             boost::system::system_category());
-        }
-
-        LOG_INFO("SSH shell channel opened");
-        return boost::system::error_code{};
-    }
-
-    SshPtyConfig config;
+    SshConfig config;
     net::any_io_executor executor;
     tcp::socket sshSocket;
-    Ssh2SessionPtr session;
-    Ssh2ChannelPtr channel;
+    Ssh2SessionPtr sshSession;
     Ssh2Library ssh2Lib;
     std::atomic<bool> connected;
 };
 
 // Define the thread_local static member
-thread_local SshPtyDevice* SshPtyDevice::current_instance_ = nullptr;
+thread_local SSHClient* SSHClient::currentInstance = nullptr;
 
 } // namespace NSNAME
-
-// Made with Bob

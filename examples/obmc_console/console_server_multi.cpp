@@ -15,6 +15,7 @@
  */
 
 #include "command_line_parser.hpp"
+#include "completion_handler.hpp"
 #include "console_config.hpp"
 #include "console_dbus.hpp"
 #include "logger.hpp"
@@ -42,17 +43,11 @@ using namespace NSNAME;
 using unix_socket = boost::asio::local::stream_protocol;
 using plain_socket = unix_socket::socket;
 
-// Global stop source for cooperative cancellation
-std::stop_source globalStopSource;
+// Forward declaration for signal handling
+class MultiConsoleServer;
+MultiConsoleServer* g_serverInstance = nullptr;
 
-void signalHandler(int signal)
-{
-    if (signal == SIGINT || signal == SIGTERM)
-    {
-        LOG_INFO("Shutdown signal received");
-        globalStopSource.request_stop();
-    }
-}
+void signalHandler(int signal);
 
 /**
  * @brief Type alias for console history buffer
@@ -71,6 +66,7 @@ class ClientWriter
     virtual ~ClientWriter() = default;
     virtual net::awaitable<void> write(const std::vector<char>& data) = 0;
     virtual bool isOpen() const = 0;
+    virtual void close() = 0;
 };
 
 template <typename StreamType>
@@ -94,6 +90,15 @@ class ClientWriterImpl : public ClientWriter
     bool isOpen() const override
     {
         return streamer_.isOpen();
+    }
+
+    void close() override
+    {
+        if (streamer_.socket && streamer_.socket->is_open())
+        {
+            boost::system::error_code ec;
+            streamer_.socket->close(ec);
+        }
     }
 
   private:
@@ -283,6 +288,20 @@ class ConsoleRouter
         }
     }
 
+    /**
+     * @brief Disconnect all connected clients
+     */
+    void disconnectAllClients()
+    {
+        LOG_INFO("[{}] Disconnecting all clients (count: {})", consoleName_,
+                 clients_.size());
+        for (auto& client : clients_)
+        {
+            client->close();
+        }
+        clients_.clear();
+    }
+
   private:
     /**
      * @brief Remove a specific client from the list
@@ -338,18 +357,33 @@ class ConsoleInstance
   public:
     ConsoleInstance(net::any_io_executor io_context,
                     const DeviceConfig& deviceConfig,
-                    std::shared_ptr<sdbusplus::asio::connection> sharedBus,
-                    std::stop_token stopToken) :
+                    std::shared_ptr<sdbusplus::asio::connection> sharedBus) :
         io_context_(io_context), deviceConfig_(deviceConfig),
         acceptor_(io_context, deviceConfig.getSocketPath()),
         ringBuffer_(128 * 1024), // 128KB buffer
         router_(io_context, ringBuffer_, uart_, pty_, sshPty_,
-                deviceConfig.getName(), stopToken),
+                deviceConfig.getName(), stopSource_.get_token()),
         server_(io_context, acceptor_, router_), bus_(sharedBus),
-        stopToken_(stopToken)
+        stopToken_(stopSource_.get_token())
     {}
 
-    boost::system::error_code start()
+    ~ConsoleInstance()
+    {
+        // Clean up socket file
+        const std::string& socketPath = deviceConfig_.getSocketPath();
+        if (::unlink(socketPath.c_str()) == 0)
+        {
+            LOG_INFO("[{}] Cleaned up socket: {}", deviceConfig_.getName(),
+                     socketPath);
+        }
+        else if (errno != ENOENT)
+        {
+            LOG_WARNING("[{}] Failed to remove socket {}: {}",
+                        deviceConfig_.getName(), socketPath, strerror(errno));
+        }
+    }
+
+    net::awaitable<void> start()
     {
         LOG_INFO("[{}] Unix socket created: {}", deviceConfig_.getName(),
                  deviceConfig_.getSocketPath());
@@ -366,14 +400,15 @@ class ConsoleInstance
         initializeDbusInterface();
 
         // Start device handler
-        boost::asio::co_spawn(io_context_, handleDevice(),
-                              boost::asio::detached);
-
-        return boost::system::error_code{};
+        co_await handleDevice();
+        co_return;
     }
 
     void stop()
     {
+        // Request stop for this console instance
+        stopSource_.request_stop();
+
         if (uart_)
         {
             uart_->close();
@@ -392,6 +427,11 @@ class ConsoleInstance
     const std::string& getName() const
     {
         return deviceConfig_.getName();
+    }
+
+    void requestStop()
+    {
+        stopSource_.request_stop();
     }
 
   public:
@@ -510,7 +550,7 @@ class ConsoleInstance
 
         sshPty_ = std::make_unique<SshPtyDevice>(io_context_, sshConfig);
 
-        auto ec = sshPty_->open();
+        auto ec = co_await sshPty_->openAsync();
         if (ec)
         {
             LOG_ERROR("[{}] Failed to open SSH PTY: {}",
@@ -547,6 +587,7 @@ class ConsoleInstance
         co_await deviceConfig_.visit([this](const auto& config) {
             return config.handle(this);
         });
+        co_return;
     }
 
     template <typename ReadFunc>
@@ -567,6 +608,10 @@ class ConsoleInstance
                     LOG_ERROR("[{}] Device read error: {}",
                               deviceConfig_.getName(), readEc.message());
                 }
+                // Request stop to signal all coroutines for this instance
+                stopSource_.request_stop();
+                // Disconnect all existing clients
+                router_.disconnectAllClients();
                 break;
             }
 
@@ -784,6 +829,7 @@ class ConsoleInstance
     TcpServer<UnixStreamTypePlain, ConsoleRouter> server_;
     std::shared_ptr<sdbusplus::asio::connection> bus_;
     std::unique_ptr<ConsoleDbusInterface<ConsoleRouter>> dbusInterface_;
+    std::stop_source stopSource_;
     std::stop_token stopToken_;
 };
 
@@ -798,15 +844,16 @@ class MultiConsoleServer
         io_context_(io_context), config_(config)
     {}
 
-    boost::system::error_code start()
+    net::awaitable<void> start()
     {
         LOG_INFO("Starting multi-device console server");
         LOG_INFO("Number of devices: {}", config_.devices.size());
 
+        auto& io_ctx = static_cast<net::io_context&>(io_context_.context());
+
         // Create shared D-Bus connection for all console instances
         try
         {
-            auto& io_ctx = static_cast<net::io_context&>(io_context_.context());
             sharedBus_ = std::make_shared<sdbusplus::asio::connection>(io_ctx);
             LOG_INFO("Shared D-Bus connection established");
         }
@@ -828,16 +875,11 @@ class MultiConsoleServer
             // Remove existing socket file
             ::unlink(deviceConfig.getSocketPath().c_str());
             auto instance = std::make_unique<ConsoleInstance>(
-                io_context_, deviceConfig, sharedBus_,
-                globalStopSource.get_token());
+                io_context_, deviceConfig, sharedBus_);
 
-            auto ec = instance->start();
-            if (ec)
-            {
-                LOG_ERROR("Failed to start console {}: {}",
-                          deviceConfig.getName(), ec.message());
-                continue;
-            }
+            const auto name = deviceConfig.getName();
+            boost::asio::co_spawn(io_context_, instance->start(),
+                                  makeInstanceCompletionHandler(name));
 
             instances_.push_back(std::move(instance));
             LOG_INFO("Console {} started successfully", deviceConfig.getName());
@@ -846,11 +888,9 @@ class MultiConsoleServer
         if (instances_.empty())
         {
             LOG_ERROR("No console instances started");
-            return boost::system::errc::make_error_code(
-                boost::system::errc::no_such_device);
         }
 
-        return boost::system::error_code{};
+        co_return;
     }
 
     void stop()
@@ -863,12 +903,64 @@ class MultiConsoleServer
         instances_.clear();
     }
 
+    void requestStopAll()
+    {
+        LOG_INFO("Requesting stop for all console instances");
+        for (auto& instance : instances_)
+        {
+            instance->requestStop();
+        }
+    }
+
+    void removeInstance(const std::string& name)
+    {
+        auto it = std::find_if(instances_.begin(), instances_.end(),
+                               [&name](const auto& instance) {
+                                   return instance->getName() == name;
+                               });
+
+        if (it != instances_.end())
+        {
+            LOG_INFO("Removing console instance: {}", name);
+            instances_.erase(it);
+        }
+    }
+
+    std::function<void(std::exception_ptr)> makeInstanceCompletionHandler(
+        const std::string& name)
+    {
+        return reactor::makeCompletionHandler(
+            "Console " + name + " exited with exception", [this, name]() {
+                auto& io_ctx =
+                    static_cast<net::io_context&>(io_context_.context());
+
+                // Post to io_context to safely remove instance after
+                // coroutine completes
+                boost::asio::post(io_ctx,
+                                  [this, name]() { removeInstance(name); });
+            });
+    }
+
   private:
     net::any_io_executor io_context_;
     ConsoleConfig config_;
     std::shared_ptr<sdbusplus::asio::connection> sharedBus_;
     std::vector<std::unique_ptr<ConsoleInstance>> instances_;
 };
+
+// Signal handler implementation (after MultiConsoleServer definition)
+void signalHandler(int signal)
+{
+    if (signal == SIGINT || signal == SIGTERM)
+    {
+        LOG_INFO("Shutdown signal received");
+        if (g_serverInstance)
+        {
+            g_serverInstance->requestStopAll();
+        }
+    }
+}
+
 int main(int argc, const char* argv[])
 {
     try
@@ -910,27 +1002,25 @@ int main(int argc, const char* argv[])
         // Create IO context
         net::io_context io_context;
 
+        // Create and start multi-console server
+        MultiConsoleServer server(io_context.get_executor(), consoleConfig);
+        g_serverInstance = &server;
+
         // Setup signal handling
         boost::asio::signal_set signals(io_context, SIGINT, SIGTERM);
         signals.async_wait(
-            [&io_context](const boost::system::error_code& ec, int signal) {
+            [&io_context,
+             &server](const boost::system::error_code& ec, int signal) {
                 if (!ec)
                 {
                     LOG_INFO("Received signal {}, stopping server...", signal);
-                    globalStopSource.request_stop();
+                    server.requestStopAll();
                     io_context.stop();
                 }
             });
 
-        // Create and start multi-console server
-        MultiConsoleServer server(io_context.get_executor(), consoleConfig);
-
-        auto ec = server.start();
-        if (ec)
-        {
-            LOG_ERROR("Failed to start multi-console server: {}", ec.message());
-            return EXIT_FAILURE;
-        }
+        boost::asio::co_spawn(io_context, server.start(),
+                              boost::asio::detached);
 
         LOG_INFO("Multi-console server running. Press Ctrl+C to stop.");
 
@@ -939,6 +1029,7 @@ int main(int argc, const char* argv[])
 
         // Cleanup
         server.stop();
+        g_serverInstance = nullptr;
         LOG_INFO("Multi-console server stopped gracefully");
 
         return EXIT_SUCCESS;

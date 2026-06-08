@@ -18,6 +18,7 @@
 
 #include "beastdefs.hpp"
 #include "command_line_parser.hpp"
+#include "completion_handler.hpp"
 #include "logger.hpp"
 #include "unix_client.hpp"
 
@@ -306,7 +307,7 @@ class ConsoleClient
                     }
                     else if (ec != boost::asio::error::operation_aborted)
                     {
-                        continue;
+                        LOG_ERROR("Socket read error: {}", ec.message());
                     }
                     globalStopSource.request_stop();
                     break;
@@ -320,6 +321,7 @@ class ConsoleClient
                     if (written < 0)
                     {
                         LOG_ERROR("Failed to write to stdout");
+                        globalStopSource.request_stop();
                         break;
                     }
                 }
@@ -360,6 +362,12 @@ class ConsoleClient
                     {
                         LOG_ERROR("Stdin read error: {}", ec.message());
                     }
+                    break;
+                }
+
+                // Check stop token again after read completes
+                if (stopToken_.stop_requested())
+                {
                     break;
                 }
 
@@ -431,6 +439,20 @@ class ConsoleClient
     TerminalManager termManager_;
 };
 
+/**
+ * @brief Completion handler for client coroutine
+ * Stops io_context when the client coroutine completes
+ */
+auto makeCompletionHandler(net::io_context& ioContext)
+{
+    return reactor::makeCompletionHandler(
+        "Exception in client.run()", [&ioContext]() {
+            // Stop io_context when coroutine
+            // completes (success or failure)
+            ioContext.stop();
+        });
+}
+
 int main(int argc, const char* argv[])
 {
     try
@@ -469,7 +491,9 @@ int main(int argc, const char* argv[])
         ConsoleClient client(io_context.get_executor(), socketPath,
                              globalStopSource.get_token());
 
-        boost::asio::co_spawn(io_context, client.run(), boost::asio::detached);
+        // Spawn client coroutine with completion handler
+        boost::asio::co_spawn(io_context, client.run(),
+                              makeCompletionHandler(io_context));
 
         // Run the IO context
         io_context.run();
