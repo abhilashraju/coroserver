@@ -3,23 +3,134 @@
 #include "boost/url.hpp"
 #include "command_line_parser.hpp"
 #include "logger.hpp"
+#include "when_all.hpp"
+
+#include <memory>
+#include <vector>
+
 using namespace reactor;
-net::awaitable<void> makeRequest(RedfishClient& client,
-                                 const boost::urls::url& url)
+
+// Result structure for request responses
+struct RequestResult
+{
+    std::string name;
+    boost::system::error_code ec;
+    Response response;
+};
+
+net::awaitable<RequestResult> makeRequest(
+    RedfishClient& client, boost::urls::url url, std::string name)
 {
     RedfishClient::Request req;
     req.withMethod(http::verb::get)
         .withTarget(url.path().empty() ? "/" : url.path());
 
     auto [ec, res] = co_await client.execute(req);
-    if (ec)
+
+    co_return RequestResult{std::move(name), ec, std::move(res)};
+}
+
+net::awaitable<void> makeConcurrentRequests(RedfishClient& client,
+                                            const boost::urls::url& baseUrl,
+                                            net::io_context& ioc)
+{
+    // Define 5 URLs to fetch concurrently
+    std::vector<std::pair<std::string, std::string>> urls = {
+        {"/redfish/v1", "ServiceRoot"},
+        {"/redfish/v1/Systems", "Systems"},
+        {"/redfish/v1/Chassis", "Chassis"},
+        {"/redfish/v1/Managers", "Managers"},
+        {"/redfish/v1/SessionService", "SessionService"}};
+
+    LOG_INFO("Launching {} concurrent requests using when_all (vector version)",
+             urls.size());
+
+    // Create vector of awaitables
+    std::vector<net::awaitable<RequestResult>> awaitables;
+    for (const auto& [path, name] : urls)
     {
-        LOG_ERROR("Error executing request: {}", ec.message());
+        boost::urls::url url = baseUrl;
+        url.set_path(path);
+        awaitables.push_back(makeRequest(client, url, name));
     }
-    else
+
+    // Execute all requests in parallel using when_all with vector
+    auto results = co_await when_all(std::move(awaitables));
+
+    LOG_INFO("All {} concurrent requests completed", results.size());
+
+    // Log results
+    for (const auto& result : results)
     {
-        LOG_INFO("Response: {}", res.body());
+        if (result.ec)
+        {
+            LOG_INFO("Request '{}' failed: {}", result.name,
+                     result.ec.message());
+        }
+        else
+        {
+            LOG_INFO("Response for {}: {}", result.name,
+                     result.response.body());
+        }
     }
+
+    co_return;
+}
+
+net::awaitable<void> makeConcurrentRequestsVariadic(
+    RedfishClient& client, const boost::urls::url& baseUrl,
+    net::io_context& ioc)
+{
+    LOG_INFO(
+        "Launching 5 concurrent requests using when_all (variadic version)");
+
+    // Create individual awaitables for each request
+    boost::urls::url url1 = baseUrl;
+    url1.set_path("/redfish/v1");
+    auto request1 = makeRequest(client, url1, "ServiceRoot");
+
+    boost::urls::url url2 = baseUrl;
+    url2.set_path("/redfish/v1/Systems");
+    auto request2 = makeRequest(client, url2, "Systems");
+
+    boost::urls::url url3 = baseUrl;
+    url3.set_path("/redfish/v1/Chassis");
+    auto request3 = makeRequest(client, url3, "Chassis");
+
+    boost::urls::url url4 = baseUrl;
+    url4.set_path("/redfish/v1/Managers");
+    auto request4 = makeRequest(client, url4, "Managers");
+
+    boost::urls::url url5 = baseUrl;
+    url5.set_path("/redfish/v1/SessionService");
+    auto request5 = makeRequest(client, url5, "SessionService");
+
+    // Execute all requests in parallel using when_all with variadic parameters
+    // Returns a tuple of results
+    auto [result1, result2, result3, result4, result5] = co_await when_all(
+        std::move(request1), std::move(request2), std::move(request3),
+        std::move(request4), std::move(request5));
+
+    LOG_INFO("All 5 concurrent requests completed (variadic version)");
+
+    // Log results using structured bindings
+    std::array<std::reference_wrapper<const RequestResult>, 5> results = {
+        result1, result2, result3, result4, result5};
+
+    for (const auto& result : results)
+    {
+        if (result.get().ec)
+        {
+            LOG_INFO("Request '{}' failed: {}", result.get().name,
+                     result.get().ec.message());
+        }
+        else
+        {
+            LOG_INFO("Response for {}: {}", result.get().name,
+                     result.get().response.body());
+        }
+    }
+
     co_return;
 }
 
@@ -53,9 +164,21 @@ int main(int argc, const char* argv[])
             .withProtocol("https")
             .withUserName(user.value_or("admin").data())
             .withPassword(pswd.value_or("password").data());
-        // Run the TCP client
-        net::co_spawn(ioc, std::bind_front(makeRequest, std::ref(client), url),
-                      net::detached);
+        // Run both types of concurrent requests using when_all
+        net::co_spawn(
+            ioc,
+            [&]() -> net::awaitable<void> {
+                LOG_INFO("Running both vector and variadic when_all examples "
+                         "concurrently");
+
+                // Use when_all to run both examples concurrently
+                co_await when_all(
+                    makeConcurrentRequests(std::ref(client), url, ioc),
+                    makeConcurrentRequestsVariadic(std::ref(client), url, ioc));
+
+                LOG_INFO("Both when_all examples completed successfully");
+            }(),
+            net::detached);
 
         ioc.run();
     }
