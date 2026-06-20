@@ -1,0 +1,12 @@
+[Unit]
+Description=I2C D-Bus Service
+After=dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/i2c-service
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
