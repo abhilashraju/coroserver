@@ -85,25 +85,29 @@ net::awaitable<void> makeConcurrentRequestsVariadic(
         "Launching 5 concurrent requests using when_all (variadic version)");
 
     // Create individual awaitables for each request
-    boost::urls::url url1 = baseUrl;
-    url1.set_path("/redfish/v1");
-    auto request1 = makeRequest(client, url1, "ServiceRoot");
 
-    boost::urls::url url2 = baseUrl;
-    url2.set_path("/redfish/v1/Systems");
-    auto request2 = makeRequest(client, url2, "Systems");
+    auto request1 =
+        makeRequest(client, boost::urls::url(baseUrl).set_path("/redfish/v1"),
+                    "ServiceRoot");
 
-    boost::urls::url url3 = baseUrl;
-    url3.set_path("/redfish/v1/Chassis");
-    auto request3 = makeRequest(client, url3, "Chassis");
+    auto request2 = makeRequest(
+        client, boost::urls::url(baseUrl).set_path("/redfish/v1/Systems"),
+        "Systems");
 
-    boost::urls::url url4 = baseUrl;
-    url4.set_path("/redfish/v1/Managers");
-    auto request4 = makeRequest(client, url4, "Managers");
+    auto request3 = makeRequest(
+        client, boost::urls::url(baseUrl).set_path("/redfish/v1/Chassis"),
+        "Chassis");
+
+    auto request4 = makeRequest(
+        client, boost::urls::url(baseUrl).set_path("/redfish/v1/Managers"),
+        "Managers");
 
     boost::urls::url url5 = baseUrl;
     url5.set_path("/redfish/v1/SessionService");
-    auto request5 = makeRequest(client, url5, "SessionService");
+    auto request5 = makeRequest(
+        client,
+        boost::urls::url(baseUrl).set_path("/redfish/v1/SessionService"),
+        "SessionService");
 
     // Execute all requests in parallel using when_all with variadic parameters
     // Returns a tuple of results
