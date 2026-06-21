@@ -27,7 +27,62 @@ The integration allows you to:
 
 
 
-### 1. Simple Pipeline
+## Examples
+
+### 1. Functional Web Crawler (webclient_stdexec_example.cpp)
+
+A complete example demonstrating functional programming patterns with stdexec for web crawling.
+
+**Key Patterns:**
+
+1. **Pipeline Composition Pattern**: `just(task) | fetch | extract_links | enqueue`
+   ```cpp
+   auto pipeline = stdexec::just(*task_opt) |
+                   stdexec::let_value(fetch_url(client, executor)) |
+                   extract_links(state) |
+                   enqueue_links(state);
+   ```
+
+2. **Pure Function Transformations**: Each stage is a pure function that transforms data
+   - `fetch_url()` - Fetches URL and returns response body
+   - `extract_links()` - Extracts links from HTML
+   - `enqueue_links()` - Enqueues new tasks from extracted links
+
+3. **State Management**: Shared state pattern with `std::shared_ptr<CrawlerState>`
+   - Tracks visited URLs to avoid duplicates
+   - Manages BFS queue for crawling
+   - Controls crawl depth
+
+4. **Functional Loop Pattern**: `repeat_while(has_work)`
+   ```cpp
+   while (state->hasMoreWork()) {
+       state = co_await process_one_url(client, state, executor);
+   }
+   ```
+
+5. **Declarative Data Flow**: Each operation clearly expresses intent
+   - `dequeue | fetch | extract_links | enqueue`
+   - Easy to understand and modify
+   - Composable and testable
+
+**Features Demonstrated:**
+- BFS web crawling with depth control
+- Link extraction using regex
+- Duplicate URL detection
+- Functional pipeline composition
+- Integration of Asio awaitables with stdexec senders
+- Error handling in pipelines
+
+**Usage:**
+```bash
+# Crawl google.com with max depth 2
+./webclient_stdexec_example https://google.com 2
+
+# Crawl example.com with max depth 1
+./webclient_stdexec_example https://example.com 1
+```
+
+### 2. Simple Pipeline
 Demonstrates basic pipeline: HTTP GET → extract body → process
 
 ```cpp

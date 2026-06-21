@@ -16,7 +16,7 @@
 #include "stdexec_asio_adapters.hpp"
 #include "webclient.hpp"
 
-#include <exec/repeat_n.hpp>
+#include <exec/repeat_until.hpp>
 #include <exec/start_detached.hpp>
 
 #include <algorithm>
@@ -193,41 +193,55 @@ auto fetch_url(WebClient<beast::tcp_stream>& client,
 }
 
 /**
- * @brief Extract links from HTML and enqueue new tasks - pure function
+ * @brief Extract links from HTML - pure function
  */
-auto extract_and_enqueue_links(std::shared_ptr<CrawlerState> state)
+auto extract_links(std::shared_ptr<CrawlerState> state)
 {
     return stdexec::then([state](std::pair<CrawlTask, std::string> data) {
         auto [task, body] = std::move(data);
 
         if (body.empty())
         {
-            return state;
+            return std::make_tuple(state, task, std::vector<std::string>{});
         }
 
         state->pages_crawled++;
         auto links = extractLinks(body, task.host);
-        int next_depth = task.depth + 1;
 
-        for (const auto& link : links)
-        {
-            state->addExtractedLink(link);
-
-            if (state->shouldCrawl(link, next_depth))
-            {
-                state->markVisited(link);
-                state->enqueueTask(CrawlTask(link, next_depth));
-                LOG_INFO("Enqueued: {} (depth {})", link, next_depth);
-            }
-        }
-
-        return state;
+        return std::make_tuple(state, task, links);
     });
 }
 
 /**
- * @brief Process one URL from queue - functional pipeline
- * Pattern: just(state) | dequeue | fetch | extract | enqueue
+ * @brief Enqueue new tasks from extracted links - pure function
+ */
+auto enqueue_links(std::shared_ptr<CrawlerState> state)
+{
+    return stdexec::then([state](std::tuple<std::shared_ptr<CrawlerState>,
+                                            CrawlTask, std::vector<std::string>>
+                                     data) {
+        auto [state_ptr, task, links] = std::move(data);
+        int next_depth = task.depth + 1;
+
+        for (const auto& link : links)
+        {
+            state_ptr->addExtractedLink(link);
+
+            if (state_ptr->shouldCrawl(link, next_depth))
+            {
+                state_ptr->markVisited(link);
+                state_ptr->enqueueTask(CrawlTask(link, next_depth));
+                LOG_INFO("Enqueued: {} (depth {})", link, next_depth);
+            }
+        }
+
+        return state_ptr;
+    });
+}
+
+/**
+ * @brief Process one URL from the queue - functional pipeline
+ * Pattern: dequeue | fetch | extract_links | enqueue
  */
 net::awaitable<std::shared_ptr<CrawlerState>> process_one_url(
     WebClient<beast::tcp_stream>& client, std::shared_ptr<CrawlerState> state,
@@ -239,10 +253,10 @@ net::awaitable<std::shared_ptr<CrawlerState>> process_one_url(
         co_return state;
     }
 
-    // Functional pipeline: just(task) | fetch | extract | enqueue
+    // Functional pipeline: just(task) | fetch | extract_links | enqueue
     auto pipeline = stdexec::just(*task_opt) |
                     stdexec::let_value(fetch_url(client, executor)) |
-                    extract_and_enqueue_links(state);
+                    extract_links(state) | enqueue_links(state);
 
     co_return co_await stdexec_adapters::as_awaitable(std::move(pipeline),
                                                       executor);
@@ -275,7 +289,7 @@ net::awaitable<void> crawl_functional(
     state->enqueueTask(std::move(start_task));
 
     // Functional pipeline: process URLs until queue is empty
-    // Pattern: just(state) | process_one | repeat_while(has_work)
+    // Each iteration uses: just(task) | fetch | extract_links | enqueue
     while (state->hasMoreWork())
     {
         state = co_await process_one_url(client, state, executor);

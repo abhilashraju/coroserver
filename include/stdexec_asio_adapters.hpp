@@ -34,25 +34,26 @@ namespace stdexec_adapters
 {
 
 // ============================================================================
-// Asio Awaitable → stdexec Sender Adapter
+// Asio Scheduler for stdexec (spawns awaitables)
 // ============================================================================
 
 /**
- * @brief Converts a Boost.Asio awaitable into a stdexec sender
+ * @brief A stdexec scheduler that spawns Boost.Asio awaitables
  *
- * This allows Asio coroutines to be used in stdexec pipelines.
- * The awaitable is executed when the sender is started.
+ * This scheduler uses co_spawn to execute awaitables, making it suitable
+ * for converting awaitables into senders that need to be scheduled.
+ * Use this when you need to bridge from awaitable to sender world.
  *
  * @tparam T The value type of the awaitable
  * @tparam Executor The executor type
  */
 template <typename T, typename Executor = net::any_io_executor>
-class awaitable_sender
+class AsioScheduler
 {
   public:
     using sender_concept = stdexec::sender_t;
 
-    explicit awaitable_sender(net::awaitable<T, Executor> aw, Executor ex) :
+    explicit AsioScheduler(net::awaitable<T, Executor> aw, Executor ex) :
         awaitable_(std::move(aw)), executor_(ex)
     {}
 
@@ -67,45 +68,54 @@ class awaitable_sender
         {
             // Spawn the awaitable with a completion handler that forwards to
             // receiver
-            net::co_spawn(
-                self.executor,
-                [aw =
-                     std::move(self.awaitable)]() mutable -> net::awaitable<T> {
-                    if constexpr (std::is_void_v<T>)
-                    {
+            if constexpr (std::is_void_v<T>)
+            {
+                net::co_spawn(
+                    self.executor,
+                    [aw = std::move(
+                         self.awaitable)]() mutable -> net::awaitable<void> {
                         co_await std::move(aw);
                         co_return;
-                    }
-                    else
-                    {
-                        T result = co_await std::move(aw);
-                        co_return result;
-                    }
-                }(),
-                [rcv = std::move(self.receiver)](std::exception_ptr ex,
-                                                 T result) mutable {
-                    if (ex)
-                    {
-                        stdexec::set_error(std::move(rcv), ex);
-                    }
-                    else
-                    {
-                        if constexpr (std::is_void_v<T>)
+                    }(),
+                    [rcv = std::move(self.receiver)](
+                        std::exception_ptr ex) mutable {
+                        if (ex)
+                        {
+                            stdexec::set_error(std::move(rcv), ex);
+                        }
+                        else
                         {
                             stdexec::set_value(std::move(rcv));
+                        }
+                    });
+            }
+            else
+            {
+                net::co_spawn(
+                    self.executor,
+                    [aw = std::move(
+                         self.awaitable)]() mutable -> net::awaitable<T> {
+                        T result = co_await std::move(aw);
+                        co_return result;
+                    }(),
+                    [rcv = std::move(self.receiver)](std::exception_ptr ex,
+                                                     T result) mutable {
+                        if (ex)
+                        {
+                            stdexec::set_error(std::move(rcv), ex);
                         }
                         else
                         {
                             stdexec::set_value(std::move(rcv),
                                                std::move(result));
                         }
-                    }
-                });
+                    });
+            }
         }
     };
 
     template <typename Receiver>
-    friend auto tag_invoke(stdexec::connect_t, awaitable_sender&& self,
+    friend auto tag_invoke(stdexec::connect_t, AsioScheduler&& self,
                            Receiver&& rcv)
     {
         return operation_state<std::remove_cvref_t<Receiver>>{
@@ -115,7 +125,7 @@ class awaitable_sender
 
     template <typename Env>
     friend auto tag_invoke(stdexec::get_completion_signatures_t,
-                           awaitable_sender&&, Env&&)
+                           AsioScheduler&&, Env&&)
     {
         if constexpr (std::is_void_v<T>)
         {
@@ -137,12 +147,12 @@ class awaitable_sender
 };
 
 /**
- * @brief Helper function to create an awaitable_sender
+ * @brief Helper function to create an AsioScheduler (for spawning awaitables)
  */
-template <typename T, typename Executor = net::any_io_executor>
-auto to_sender(net::awaitable<T, Executor> aw, Executor ex = {})
+template <typename T>
+auto to_sender(net::awaitable<T> aw, net::any_io_executor ex)
 {
-    return awaitable_sender<T, Executor>(std::move(aw), ex);
+    return AsioScheduler<T, net::any_io_executor>(std::move(aw), ex);
 }
 
 // ============================================================================
@@ -319,76 +329,6 @@ auto as_awaitable(Sender&& sender, net::any_io_executor ex)
         }
     }(std::forward<Sender>(sender), ex);
 }
-
-// ============================================================================
-// Asio Scheduler for stdexec
-// ============================================================================
-
-/**
- * @brief A stdexec scheduler that uses Boost.Asio's io_context
- *
- * This allows stdexec algorithms to execute on an Asio io_context.
- */
-class asio_scheduler
-{
-  public:
-    explicit asio_scheduler(net::io_context& io) : io_(io) {}
-
-    struct sender
-    {
-        using sender_concept = stdexec::sender_t;
-
-        net::io_context& io;
-
-        template <typename Receiver>
-        struct operation_state
-        {
-            net::io_context& io;
-            Receiver receiver;
-
-            friend void tag_invoke(stdexec::start_t,
-                                   operation_state& self) noexcept
-            {
-                net::post(self.io, [rcv = std::move(self.receiver)]() mutable {
-                    stdexec::set_value(std::move(rcv));
-                });
-            }
-        };
-
-        template <typename Receiver>
-        friend auto tag_invoke(stdexec::connect_t, sender&& self,
-                               Receiver&& rcv)
-        {
-            return operation_state<std::remove_cvref_t<Receiver>>{
-                self.io, std::forward<Receiver>(rcv)};
-        }
-
-        template <typename Env>
-        friend auto tag_invoke(stdexec::get_completion_signatures_t, sender&&,
-                               Env&&)
-        {
-            return stdexec::completion_signatures<stdexec::set_value_t()>{};
-        }
-    };
-
-    friend sender tag_invoke(stdexec::schedule_t, asio_scheduler self)
-    {
-        return sender{self.io_};
-    }
-
-    friend bool operator==(asio_scheduler a, asio_scheduler b) noexcept
-    {
-        return &a.io_ == &b.io_;
-    }
-
-    friend bool operator!=(asio_scheduler a, asio_scheduler b) noexcept
-    {
-        return !(a == b);
-    }
-
-  private:
-    net::io_context& io_;
-};
 
 } // namespace stdexec_adapters
 
