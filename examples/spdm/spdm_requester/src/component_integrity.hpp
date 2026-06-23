@@ -289,6 +289,18 @@ class ComponentIntegrity :
             throw sdbusplus::xyz::openbmc_project::Common::Error::
                 InternalFailure();
         }
+
+        // Set provisioned state to true after successful certificate exchange
+        LOG_INFO("Setting provisioned state to true after successful exchange");
+        bool provisionResult = co_await method_call(
+            ComponentIntegrityIface::set_provisioned_t{}, true);
+        if (!provisionResult)
+        {
+            LOG_ERROR("Failed to set provisioned state");
+            throw sdbusplus::xyz::openbmc_project::Common::Error::
+                InternalFailure();
+        }
+
         co_return;
     }
 
@@ -330,6 +342,35 @@ class ComponentIntegrity :
         return true;
     }
 
+    static void removeComponentIntegrity(const std::string& deviceId)
+    {
+        std::string path = std::format(CompIntegrityPath, deviceId);
+        auto it = spdmDevices.find(path);
+        if (it != spdmDevices.end())
+        {
+            LOG_INFO("Removing Component Integrity object at {}", path);
+            spdmDevices.erase(it);
+        }
+    }
+
+    static void scheduleRecreation(
+        boost::asio::io_context& ioContext,
+        std::shared_ptr<sdbusplus::asio::connection> conn,
+        DeviceInfo deviceInfo, std::chrono::seconds delay)
+    {
+        auto timer = std::make_shared<net::steady_timer>(ioContext);
+        timer->expires_after(delay);
+        timer->async_wait([&ioContext, conn, deviceInfo = std::move(deviceInfo),
+                           timer](const boost::system::error_code& ec) mutable {
+            if (!ec)
+            {
+                LOG_INFO("Recreating Component Integrity for {}",
+                         deviceInfo.id());
+                addComponentIntegrity(ioContext, conn, std::move(deviceInfo));
+            }
+        });
+    }
+
     static void addComponentIntegrity(
         boost::asio::io_context& ioContext,
         std::shared_ptr<sdbusplus::asio::connection> conn,
@@ -342,6 +383,33 @@ class ComponentIntegrity :
                 auto spmdmtask = [&ioContext, conn, &deviceInfo]() {
                     auto requester = std::make_shared<SpdmRequester>(
                         ioContext, "/etc/ssl/certs/authority");
+
+                    // Set up error callback for connection failures
+                    requester->onClose([&ioContext, conn, deviceInfo](
+                                           SpdmTcpClient::CloseReason reason) {
+                        std::string reasonStr;
+                        switch (reason)
+                        {
+                            case SpdmTcpClient::CloseReason::SendFailed:
+                                reasonStr = "Send failed";
+                                break;
+                            case SpdmTcpClient::CloseReason::ReceiveFailed:
+                                reasonStr = "Receive failed";
+                                break;
+                            case SpdmTcpClient::CloseReason::ConnectionLost:
+                                reasonStr = "Connection lost";
+                                break;
+                        }
+                        LOG_ERROR("SPDM connection error for {}: {}",
+                                  deviceInfo.id(), reasonStr);
+
+                        // Remove the failed component
+                        removeComponentIntegrity(deviceInfo.id());
+
+                        // Schedule recreation after 5 seconds
+                        scheduleRecreation(ioContext, conn, deviceInfo,
+                                           std::chrono::seconds(5));
+                    });
 
                     if (!connectToResponder(requester, deviceInfo))
                     {

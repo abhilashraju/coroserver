@@ -47,6 +47,11 @@ struct SpdmRequester
 
     ~SpdmRequester() = default;
 
+    void onClose(SpdmTcpClient::OnCloseCallback callback)
+    {
+        connection_->onClose(std::move(callback));
+    }
+
     // Delegate connection methods to SpdmConnection
     bool connect(const std::string& host, uint16_t port)
     {

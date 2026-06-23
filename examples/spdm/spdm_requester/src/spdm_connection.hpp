@@ -39,6 +39,11 @@ class SpdmConnectionManager :
 
     ~SpdmConnectionManager() {}
 
+    void onClose(SpdmTcpClient::OnCloseCallback callback)
+    {
+        client.onClose(std::move(callback));
+    }
+
     bool connect(const std::string& host, uint16_t port)
     {
         return !client.connect(host, port);
