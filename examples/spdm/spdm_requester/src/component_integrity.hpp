@@ -2,6 +2,7 @@
 
 #include "worker.hpp"
 
+#include <async_wait.hpp>
 #include <sdbusplus/asio/object_server.hpp>
 #include <sdbusplus/bus.hpp>
 #include <xyz/openbmc_project/Attestation/ComponentIntegrity/aserver_asio.hpp>
@@ -205,9 +206,9 @@ class ComponentIntegrity :
                 ioContext, std::move(spmdmtask));
         if (ec || !measurements)
         {
-            LOG_ERROR("Error getting measurements from SPDM: {}", ec.message());
-            throw sdbusplus::xyz::openbmc_project::Common::Error::
-                InternalFailure();
+            LOG_ERROR("Error getting measurements from SPDM: {}",
+                      ec ? ec.message() : "operation failed");
+            throw sdbusplus::xyz::openbmc_project::Common::Error::Unavailable();
         }
         co_return *measurements;
     }
@@ -215,14 +216,11 @@ class ComponentIntegrity :
         MeasurementSetIface::exchange_certificate_t)
     {
         auto spmdmtask = [this]() -> std::optional<std::string> {
-            auto [val, path] =
-                requester->exchangeCertificates("/etc/ssl/certs/self_ca.pem");
-            if (val)
+            auto result = exchangeCertificatesHelper();
+            if (result)
             {
-                LOG_INFO("Certificate exchanged, path: {}", path);
-                return std::optional(path);
+                return std::get<1>(*result);
             }
-
             return std::nullopt;
         };
 
@@ -230,20 +228,55 @@ class ComponentIntegrity :
             ioContext, std::move(spmdmtask));
         if (ec || !path)
         {
-            LOG_ERROR("Error in exchanging certificates:", ec.message());
-            co_return std::make_tuple(false, "");
+            LOG_ERROR("Error in exchanging certificates: {}",
+                      ec ? ec.message() : "operation failed");
+            throw sdbusplus::xyz::openbmc_project::Common::Error::Unavailable();
         }
         LOG_INFO("Certificate exchanged successfully, path: {}", *path);
         co_return std::make_tuple(true, *path);
     }
 
+    /**
+     * @brief Helper function to exchange certificates
+     * @param certPath Path to the certificate file
+     * @return Optional tuple of (success, cert_path) if successful, nullopt
+     * otherwise
+     */
+    std::optional<std::tuple<bool, std::string>> exchangeCertificatesHelper(
+        const std::string& certPath = "/etc/ssl/certs/self_ca.pem")
+    {
+        auto [val, path] = requester->exchangeCertificates(certPath);
+        if (!val)
+        {
+            LOG_ERROR("Failed to exchange certificates");
+            return std::nullopt;
+        }
+
+        LOG_INFO("Certificate exchanged successfully, path: {}", path);
+        return std::make_tuple(true, path);
+    }
+
+    /**
+     * @brief Helper function to set provisioned state
+     * @param provisioned The provisioned state to set
+     * @return true if successful, false otherwise
+     */
+    bool setProvisionedState(bool provisioned)
+    {
+        bool result = requester->setProvisioned(provisioned);
+        if (!result)
+        {
+            LOG_ERROR("Failed to set provisioned state to {}", provisioned);
+        }
+        return result;
+    }
+
     virtual boost::asio::awaitable<bool> method_call(
-        ComponentIntegrityIface::set_provisioned_t, bool provisioned)
+        MeasurementSetIface::set_provisioned_t, bool provisioned)
     {
         auto spdmTask = [this, provisioned]() -> std::optional<bool> {
             // Send SET_PROVISIONED message to the SPDM responder
-            bool result = requester->setProvisioned(provisioned);
-            if (result)
+            if (setProvisionedState(provisioned))
             {
                 return std::optional(true);
             }
@@ -254,8 +287,9 @@ class ComponentIntegrity :
             ioContext, std::move(spdmTask));
         if (ec || !success)
         {
-            LOG_ERROR("Error setting provisioned state: {}", ec.message());
-            co_return false;
+            LOG_ERROR("Error setting provisioned state: {}",
+                      ec ? ec.message() : "operation failed");
+            throw sdbusplus::xyz::openbmc_project::Common::Error::Unavailable();
         }
         co_return *success;
     }
@@ -267,38 +301,33 @@ class ComponentIntegrity :
             // Perform application data exchange over the active SPDM secure
             // session This uses the certificate exchange mechanism as the
             // underlying secure channel
-            auto [val, path] =
-                requester->exchangeCertificates("/etc/ssl/certs/self_ca.pem");
-            if (val)
+            auto result = exchangeCertificatesHelper();
+            if (!result)
             {
-                LOG_INFO(
-                    "Application data exchanged successfully via secure session, cert path: {}",
-                    path);
-                return std::optional(true);
+                LOG_ERROR(
+                    "Failed to exchange application data over secure session");
+                return std::nullopt;
             }
-            LOG_ERROR(
-                "Failed to exchange application data over secure session");
-            return std::nullopt;
+
+            // Set provisioned state to true after successful certificate
+            // exchange
+            LOG_INFO(
+                "Setting provisioned state to true after successful exchange");
+            if (!setProvisionedState(true))
+            {
+                return std::nullopt;
+            }
+
+            return std::optional(true);
         };
 
         auto [ec, success] = co_await asyncCall<std::optional<bool>>(
             ioContext, std::move(spdmTask));
         if (ec || !success)
         {
-            LOG_ERROR("Error exchanging application data: {}", ec.message());
-            throw sdbusplus::xyz::openbmc_project::Common::Error::
-                InternalFailure();
-        }
-
-        // Set provisioned state to true after successful certificate exchange
-        LOG_INFO("Setting provisioned state to true after successful exchange");
-        bool provisionResult = co_await method_call(
-            ComponentIntegrityIface::set_provisioned_t{}, true);
-        if (!provisionResult)
-        {
-            LOG_ERROR("Failed to set provisioned state");
-            throw sdbusplus::xyz::openbmc_project::Common::Error::
-                InternalFailure();
+            LOG_ERROR("Error exchanging application data: {}",
+                      ec ? ec.message() : "operation failed");
+            throw sdbusplus::xyz::openbmc_project::Common::Error::Unavailable();
         }
 
         co_return;
@@ -352,34 +381,42 @@ class ComponentIntegrity :
             spdmDevices.erase(it);
         }
     }
-
-    static void scheduleRecreation(
+    static void handleConnectionError(
         boost::asio::io_context& ioContext,
         std::shared_ptr<sdbusplus::asio::connection> conn,
-        DeviceInfo deviceInfo, std::chrono::seconds delay)
+        DeviceInfo deviceInfo, SpdmTcpClient::CloseReason reason)
     {
-        auto timer = std::make_shared<net::steady_timer>(ioContext);
-        timer->expires_after(delay);
-        timer->async_wait([&ioContext, conn, deviceInfo = std::move(deviceInfo),
-                           timer](const boost::system::error_code& ec) mutable {
-            if (!ec)
-            {
-                LOG_INFO("Recreating Component Integrity for {}",
-                         deviceInfo.id());
-                addComponentIntegrity(ioContext, conn, std::move(deviceInfo));
-            }
-        });
+        std::string reasonStr;
+        switch (reason)
+        {
+            case SpdmTcpClient::CloseReason::SendFailed:
+                reasonStr = "Send failed";
+                break;
+            case SpdmTcpClient::CloseReason::ReceiveFailed:
+                reasonStr = "Receive failed";
+                break;
+            case SpdmTcpClient::CloseReason::ConnectionLost:
+                reasonStr = "Connection lost";
+                break;
+        }
+        LOG_ERROR("SPDM connection error for {}: {}", deviceInfo.id(),
+                  reasonStr);
+
+        // Just remove the component, don't recreate
+        removeComponentIntegrity(deviceInfo.id());
+        addComponentIntegrity(ioContext, conn, deviceInfo);
     }
 
     static void addComponentIntegrity(
         boost::asio::io_context& ioContext,
         std::shared_ptr<sdbusplus::asio::connection> conn,
-        DeviceInfo deviceInfo)
+        DeviceInfo deviceInfo, int retry = 0)
     {
+        static constexpr int MAXTRY = 3;
         net::co_spawn(
             ioContext,
-            [&ioContext, conn,
-             deviceInfo = std::move(deviceInfo)]() -> net::awaitable<void> {
+            [&ioContext, conn, deviceInfo = std::move(deviceInfo),
+             retry]() -> net::awaitable<void> {
                 auto spmdmtask = [&ioContext, conn, &deviceInfo]() {
                     auto requester = std::make_shared<SpdmRequester>(
                         ioContext, "/etc/ssl/certs/authority");
@@ -387,28 +424,8 @@ class ComponentIntegrity :
                     // Set up error callback for connection failures
                     requester->onClose([&ioContext, conn, deviceInfo](
                                            SpdmTcpClient::CloseReason reason) {
-                        std::string reasonStr;
-                        switch (reason)
-                        {
-                            case SpdmTcpClient::CloseReason::SendFailed:
-                                reasonStr = "Send failed";
-                                break;
-                            case SpdmTcpClient::CloseReason::ReceiveFailed:
-                                reasonStr = "Receive failed";
-                                break;
-                            case SpdmTcpClient::CloseReason::ConnectionLost:
-                                reasonStr = "Connection lost";
-                                break;
-                        }
-                        LOG_ERROR("SPDM connection error for {}: {}",
-                                  deviceInfo.id(), reasonStr);
-
-                        // Remove the failed component
-                        removeComponentIntegrity(deviceInfo.id());
-
-                        // Schedule recreation after 5 seconds
-                        scheduleRecreation(ioContext, conn, deviceInfo,
-                                           std::chrono::seconds(5));
+                        handleConnectionError(ioContext, conn, deviceInfo,
+                                              reason);
                     });
 
                     if (!connectToResponder(requester, deviceInfo))
@@ -431,7 +448,15 @@ class ComponentIntegrity :
                         ioContext, std::move(spmdmtask));
                 if (ec || !integrity)
                 {
-                    LOG_ERROR("Error executing SPDM task{}", ec.message());
+                    LOG_ERROR("Error executing SPDM task{}",
+                              ec ? ec.message() : "Connection Error");
+                    if (!integrity && retry < MAXTRY)
+                    {
+                        // try again.
+                        co_await reactor::waitFor(ioContext.get_executor(), 5s);
+                        addComponentIntegrity(ioContext, conn, deviceInfo,
+                                              retry + 1);
+                    }
                     co_return;
                 }
                 LOG_INFO(

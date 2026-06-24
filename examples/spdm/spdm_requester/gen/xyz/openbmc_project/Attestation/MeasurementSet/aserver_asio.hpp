@@ -83,6 +83,11 @@ class MeasurementSet :
         using value_types = std::tuple<>;
         using return_type = std::tuple<bool, std::string>;
     };
+    struct set_provisioned_t
+    {
+        using value_types = std::tuple<bool>;
+        using return_type = bool;
+    };
 
   protected:
   private:
@@ -126,6 +131,11 @@ class MeasurementSet :
 
     static constexpr auto _method_typeid_r_exchange_certificate =
         utility::tuple_to_array(message::types::type_id<bool, std::string>());
+    static constexpr auto _method_typeid_p_set_provisioned =
+        utility::tuple_to_array(message::types::type_id<bool>());
+
+    static constexpr auto _method_typeid_r_set_provisioned =
+        utility::tuple_to_array(message::types::type_id<bool>());
 
     static int _callback_m_spdm_get_signed_measurements(
         sd_bus_message* msg, void* context,
@@ -203,6 +213,12 @@ class MeasurementSet :
                             m.new_method_error(e).method_return();
                             co_return;
                         }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
                         catch (const std::exception&)
                         {
                             self->_context().get_bus().set_current_exception(
@@ -275,6 +291,12 @@ class MeasurementSet :
                             m.new_method_error(e).method_return();
                             co_return;
                         }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
                         catch (const std::exception&)
                         {
                             self->_context().get_bus().set_current_exception(
@@ -298,6 +320,12 @@ class MeasurementSet :
         }
         catch (const sdbusplus::xyz::openbmc_project::Common::Error::
                    InternalFailure& e)
+        {
+            return e.set_error(error);
+        }
+        catch (
+            const sdbusplus::xyz::openbmc_project::Common::Error::Unavailable&
+                e)
         {
             return e.set_error(error);
         }
@@ -364,6 +392,12 @@ class MeasurementSet :
                             co_return;
                         }
                         catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
                                    Error::Timeout& e)
                         {
                             m.new_method_error(e).method_return();
@@ -420,6 +454,12 @@ class MeasurementSet :
                             co_return;
                         }
                         catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
                                    Error::Timeout& e)
                         {
                             m.new_method_error(e).method_return();
@@ -444,7 +484,159 @@ class MeasurementSet :
         {
             return e.set_error(error);
         }
+        catch (
+            const sdbusplus::xyz::openbmc_project::Common::Error::Unavailable&
+                e)
+        {
+            return e.set_error(error);
+        }
         catch (const sdbusplus::xyz::openbmc_project::Common::Error::Timeout& e)
+        {
+            return e.set_error(error);
+        }
+        catch (const std::exception&)
+        {
+            self->_context().get_bus().set_current_exception(
+                std::current_exception());
+            return -EINVAL;
+        }
+
+        return 1;
+    }
+    static int _callback_m_set_provisioned(sd_bus_message* msg, void* context,
+                                           sd_bus_error* error [[maybe_unused]])
+        requires(server_details::has_method<set_provisioned_t, Instance, bool>)
+    {
+        auto self = static_cast<MeasurementSet*>(context);
+        auto self_i = static_cast<Instance*>(self);
+
+        try
+        {
+            auto m = sdbusplus::message_t{msg};
+            auto provisioned = m.unpack<bool>();
+
+            constexpr auto has_method_msg =
+                server_details::has_method_msg<set_provisioned_t, Instance,
+                                               bool>;
+
+            if constexpr (has_method_msg)
+            {
+                constexpr auto is_async = std::is_same_v<
+                    boost::asio::awaitable<bool>,
+                    decltype(self_i->method_call(set_provisioned_t{}, m,
+                                                 std::move(provisioned)))>;
+
+                if constexpr (!is_async)
+                {
+                    auto r = m.new_method_return();
+                    r.append(self_i->method_call(set_provisioned_t{}, m,
+                                                 std::move(provisioned)));
+                    r.method_return();
+                }
+                else
+                {
+                    auto fn =
+                        [](auto self, auto self_i, sdbusplus::message_t m,
+                           bool provisioned) -> boost::asio::awaitable<void> {
+                        try
+                        {
+                            auto r = m.new_method_return();
+                            r.append(co_await self_i->method_call(
+                                set_provisioned_t{}, m,
+                                std::move(provisioned)));
+
+                            r.method_return();
+                            co_return;
+                        }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::InternalFailure& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
+                        catch (const std::exception&)
+                        {
+                            self->_context().get_bus().set_current_exception(
+                                std::current_exception());
+                            co_return;
+                        }
+                    };
+
+                    boost::asio::co_spawn(
+                        self->_context().ctx,
+                        std::move(fn(self, self_i, m, std::move(provisioned))),
+                        boost::asio::detached);
+                }
+            }
+            else
+            {
+                constexpr auto is_async [[maybe_unused]] = std::is_same_v<
+                    boost::asio::awaitable<bool>,
+                    decltype(self_i->method_call(set_provisioned_t{},
+                                                 std::move(provisioned)))>;
+
+                if constexpr (!is_async)
+                {
+                    auto r = m.new_method_return();
+                    r.append(self_i->method_call(set_provisioned_t{},
+                                                 std::move(provisioned)));
+                    r.method_return();
+                }
+                else
+                {
+                    auto fn =
+                        [](auto self, auto self_i, sdbusplus::message_t m,
+                           bool provisioned) -> boost::asio::awaitable<void> {
+                        try
+                        {
+                            auto r = m.new_method_return();
+                            r.append(co_await self_i->method_call(
+                                set_provisioned_t{}, std::move(provisioned)));
+
+                            r.method_return();
+                            co_return;
+                        }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::InternalFailure& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
+                        catch (const std::exception&)
+                        {
+                            self->_context().get_bus().set_current_exception(
+                                std::current_exception());
+                            co_return;
+                        }
+                    };
+
+                    boost::asio::co_spawn(
+                        self->_context().ctx,
+                        fn(self, self_i, m, std::move(provisioned)),
+                        boost::asio::detached);
+                }
+            }
+        }
+        catch (const sdbusplus::xyz::openbmc_project::Common::Error::
+                   InternalFailure& e)
+        {
+            return e.set_error(error);
+        }
+        catch (
+            const sdbusplus::xyz::openbmc_project::Common::Error::Unavailable&
+                e)
         {
             return e.set_error(error);
         }
@@ -470,6 +662,11 @@ class MeasurementSet :
                        _method_typeid_p_exchange_certificate.data(),
                        _method_typeid_r_exchange_certificate.data(),
                        _callback_m_exchange_certificate),
+
+        vtable::method("SetProvisioned",
+                       _method_typeid_p_set_provisioned.data(),
+                       _method_typeid_r_set_provisioned.data(),
+                       _callback_m_set_provisioned),
 
         vtable::end(),
     };

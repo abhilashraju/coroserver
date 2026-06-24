@@ -5,6 +5,8 @@
 
 #include <chrono>
 
+using namespace std::chrono_literals;
+
 namespace NSNAME
 {
 
@@ -77,6 +79,47 @@ inline net::awaitable<boost::system::error_code> waitFor(
     auto [ec] =
         co_await timer.async_wait(boost::asio::as_tuple(net::use_awaitable));
     co_return ec;
+}
+
+/**
+ * @brief Execute an awaitable after a specified delay
+ *
+ * Waits for the specified delay period, then executes the provided awaitable.
+ * This is useful for scheduling operations to run after a certain time period.
+ * Returns an awaitable that can be co_awaited from another coroutine.
+ *
+ * @tparam T The result type of the awaitable
+ * @param executor The executor to run the timer on
+ * @param delay The delay before starting the awaitable
+ * @param awaitable The awaitable to execute after the delay
+ * @return Awaitable that returns the result of the awaitable
+ *
+ * @example
+ * // Defer an HTTP request by 2 seconds
+ * auto response = co_await deferExecution(
+ *     executor_,
+ *     std::chrono::seconds(2),
+ *     httpClient.async_get("/api/data", net::use_awaitable)
+ * );
+ *
+ * @example
+ * // Schedule a database query to run after 500ms
+ * auto result = co_await deferExecution(
+ *     executor_,
+ *     std::chrono::milliseconds(500),
+ *     db.async_query("SELECT * FROM users", net::use_awaitable)
+ * );
+ */
+template <typename T>
+net::awaitable<T> deferExecution(net::any_io_executor executor,
+                                 net::steady_timer::duration delay,
+                                 net::awaitable<T> awaitable)
+{
+    // Wait for the delay period
+    co_await waitFor(executor, delay);
+
+    // Execute and return the result of the awaitable
+    co_return co_await std::move(awaitable);
 }
 
 } // namespace NSNAME

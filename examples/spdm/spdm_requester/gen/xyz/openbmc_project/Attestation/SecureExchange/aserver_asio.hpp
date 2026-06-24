@@ -159,6 +159,12 @@ class SecureExchange :
                             m.new_method_error(e).method_return();
                             co_return;
                         }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
                         catch (const std::exception&)
                         {
                             self->_context().get_bus().set_current_exception(
@@ -208,6 +214,12 @@ class SecureExchange :
                             m.new_method_error(e).method_return();
                             co_return;
                         }
+                        catch (const sdbusplus::xyz::openbmc_project::Common::
+                                   Error::Unavailable& e)
+                        {
+                            m.new_method_error(e).method_return();
+                            co_return;
+                        }
                         catch (const std::exception&)
                         {
                             self->_context().get_bus().set_current_exception(
@@ -228,6 +240,12 @@ class SecureExchange :
             return e.set_error(error);
         }
         catch (const sdbusplus::xyz::openbmc_project::Common::Error::Timeout& e)
+        {
+            return e.set_error(error);
+        }
+        catch (
+            const sdbusplus::xyz::openbmc_project::Common::Error::Unavailable&
+                e)
         {
             return e.set_error(error);
         }
