@@ -32,6 +32,7 @@ PACKAGES =+ " \
     ${PN}-tcp-server \
     ${PN}-lldp-discoverd \
     ${PN}-redfishproxy \
+    ${PN}-i2c-service \
 "
 
 PACKAGES =+ "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
@@ -78,19 +79,26 @@ FILES:${PN}-spdm = " \
     ${sysconfdir}/dbus-1/system.d/xyz.openbmc_project.spdm.requester.conf \
 "
 
+FILES:${PN}-i2c-service = " \
+    ${bindir}/i2c-service \
+    ${systemd_system_unitdir}/com.ibm.I2CService.service \
+"
+
 FILES:${PN}-dev = " \
     ${includedir}/reactor \
     ${libdir}/pkgconfig/reactor.pc \
 "
 
-SYSTEMD_PACKAGES = "${PN}-lldp-discoverd ${PN}-redfishproxy"
+SYSTEMD_PACKAGES = "${PN}-lldp-discoverd ${PN}-redfishproxy ${PN}-i2c-service"
 SYSTEMD_PACKAGES += "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
 
 SYSTEMD_SERVICE:${PN}-lldp-discoverd = "lldp_discoverd.service"
 SYSTEMD_SERVICE:${PN}-redfishproxy = "redfishproxy.service"
+SYSTEMD_SERVICE:${PN}-i2c-service = "com.ibm.I2CService.service"
 SYSTEMD_SERVICE:${PN}-spdm = "xyz.openbmc_project.spdm.responder.service xyz.openbmc_project.spdm.requester.service"
 
 RDEPENDS:${PN}-lldp-discoverd += "systemd"
 RDEPENDS:${PN}-redfishproxy += "systemd"
+RDEPENDS:${PN}-i2c-service += "systemd"
 RDEPENDS:${PN}-spdm += "systemd"
 #PACKAGECONFIG:remove:pn-coroserver-examples = "spdm"
