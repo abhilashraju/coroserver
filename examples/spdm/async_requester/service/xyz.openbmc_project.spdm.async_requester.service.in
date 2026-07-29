@@ -1,0 +1,11 @@
+[Unit]
+Description=async attestation requester service
+
+[Service]
+ExecStart=/usr/bin/spdm_requester_async -p 2448 -i eth2
+Restart=always
+Type=dbus
+BusName=xyz.openbmc_project.spdm.async_requester
+
+[Install]
+WantedBy=network.target

@@ -53,6 +53,13 @@
 #include <sdbusplus/exception.hpp>
 #include <sdbusplus/server.hpp>
 #include <sdbusplus/timer.hpp>
+
+namespace sdbuscompat
+{
+using object_path = ::sdbusplus::message::object_path;
+using match_t = ::sdbusplus::bus::match_t;
+} // namespace sdbuscompat
+
 namespace NSNAME
 {
 // Common D-Bus service and interface names
@@ -600,7 +607,7 @@ inline AwaitableResult<std::string> introspect(
     const sdbusplus::message::object_path& path)
 {
     co_return co_await awaitable_dbus_method_call<std::string>(
-        bus, service, path, dbusIntrospectableInterface, "Introspect");
+        bus, service, std::string(path), dbusIntrospectableInterface, "Introspect");
 }
 /**
  * @brief Get default value for a type

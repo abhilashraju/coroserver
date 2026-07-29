@@ -21,9 +21,19 @@ class SpdmProtocolHandler
   public:
     SpdmProtocolHandler() : dispatchRetryCount_(0) {}
 
+    // libspdm never frees scratch_buffer or cert_chain_buffer — the caller
+    // owns them for the entire lifetime of spdm_context.  We hold them here
+    // so they outlive every dispatch call and are released in the destructor.
+    ~SpdmProtocolHandler()
+    {
+        std::free(scratchBuffer_);
+        std::free(certChainBuffer_);
+    }
+
     bool initializeResponder(void* spdmContext)
     {
-        if (!spdmResponderInit(spdmContext))
+        if (!spdmResponderInit(spdmContext, scratchBuffer_, scratchSize_,
+                               certChainBuffer_))
         {
             LOG_ERROR(
                 "Failed to initialize SPDM responder: certificate chain loading failed");
@@ -124,4 +134,9 @@ class SpdmProtocolHandler
   private:
     size_t dispatchRetryCount_;
     static constexpr size_t maxDispatchRetries_ = 100;
+
+    // Buffers handed to libspdm — owned here, freed in destructor.
+    void*  scratchBuffer_    {nullptr};
+    size_t scratchSize_      {0};
+    void*  certChainBuffer_  {nullptr};
 };

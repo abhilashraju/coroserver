@@ -58,7 +58,18 @@ bool setCertificateChain(void* spdm_context, uint8_t slot_id)
     }
     return false;
 }
-bool spdmResponderInit(void* spdm_context)
+/**
+ * @param spdm_context   Initialised libspdm responder context.
+ * @param scratch_buffer Out: raw pointer to the allocated scratch buffer.
+ *                       The CALLER must keep this allocation alive for the
+ *                       entire lifetime of spdm_context.  Previously this was
+ *                       a local unique_ptr which was freed on return, leaving
+ *                       libspdm with a dangling pointer and causing heap
+ *                       corruption (manifesting as INVALID_MSG_FIELD errors).
+ * @param scratch_size   Out: size of the allocation stored in scratch_buffer.
+ */
+bool spdmResponderInit(void* spdm_context, void*& scratch_buffer,
+                       size_t& scratch_size, void*& cert_chain_buffer)
 {
     libspdm_data_parameter_t parameter;
     uint8_t data8;
@@ -67,27 +78,24 @@ bool spdmResponderInit(void* spdm_context)
     spdm_version_number_t spdm_version;
     // libspdm_return_t status;
 
-    size_t scratch_buffer_size =
-        libspdm_get_sizeof_required_scratch_buffer(spdm_context);
-
-    // Use unique_ptr with custom deleter for automatic memory management
-    std::unique_ptr<void, decltype(&free)> m_scratch_buffer(
-        malloc(scratch_buffer_size), free);
-    if (m_scratch_buffer == nullptr)
+    scratch_size = libspdm_get_sizeof_required_scratch_buffer(spdm_context);
+    scratch_buffer = malloc(scratch_size);
+    if (scratch_buffer == nullptr)
     {
         return false;
     }
-    libspdm_set_scratch_buffer(spdm_context, m_scratch_buffer.get(),
-                               scratch_buffer_size);
+    libspdm_set_scratch_buffer(spdm_context, scratch_buffer, scratch_size);
 
-    std::unique_ptr<void, decltype(&free)> requester_cert_chain_buffer(
-        malloc(SPDM_MAX_CERTIFICATE_CHAIN_SIZE), free);
-    if (requester_cert_chain_buffer == nullptr)
+    // NOTE: cert_chain_buffer is the out-parameter — assigned here, owned by
+    // the caller (SpdmProtocolHandler).  Same lifetime fix as scratch_buffer.
+    cert_chain_buffer = malloc(SPDM_MAX_CERTIFICATE_CHAIN_SIZE);
+    if (cert_chain_buffer == nullptr)
     {
+        free(scratch_buffer);
+        scratch_buffer = nullptr;
         return false;
     }
-    libspdm_register_cert_chain_buffer(spdm_context,
-                                       requester_cert_chain_buffer.get(),
+    libspdm_register_cert_chain_buffer(spdm_context, cert_chain_buffer,
                                        SPDM_MAX_CERTIFICATE_CHAIN_SIZE);
 
     if (m_use_version != 0)

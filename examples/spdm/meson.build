@@ -54,6 +54,7 @@ incdir = include_directories(
 
 spdm_dep = declare_dependency(
     include_directories: [reactor_inc, incdir],
+    compile_args: ['-DLIBSPDM_ENABLE_MSG_LOG=1'],
     dependencies: [
         sdbusplus_dep,
         sdeventplus_dep,
@@ -67,3 +68,5 @@ spdm_dep = declare_dependency(
 
 subdir('spdm_responder')
 subdir('spdm_requester')
+subdir('async_responder')
+subdir('async_requester')

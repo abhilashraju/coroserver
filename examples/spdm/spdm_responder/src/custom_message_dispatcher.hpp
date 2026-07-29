@@ -44,52 +44,46 @@ class CustomMessageDispatcher
         customMessageHandlers_[messageCode] = handler;
     }
 
-    bool handleCustomMessage(void* spdmContext,
-                             const std::vector<uint8_t>& messageData)
+    /**
+     * @brief Dispatch a decoded request to its custom handler and return the
+     *        response bytes.  The caller is responsible for sending the response
+     *        (e.g. by writing it into libspdm's response buffer).
+     *
+     * @return Non-empty vector on success; empty on unknown opcode or error.
+     */
+    std::vector<uint8_t> dispatchToHandler(
+        const std::vector<uint8_t>& messageData)
     {
-        if (messageData.empty())
-        {
-            return false;
-        }
-
-        // Check if it's a custom certificate exchange message
-        if (messageData.size() < sizeof(SpdmMessageHeader))
-        {
-            return false;
-        }
-
-        // Validate message size against protocol-defined limits
-        if (messageData.size() > MAX_CERTIFICATE_SIZE)
-        {
-            return false;
-        }
+        if (messageData.size() < sizeof(SpdmMessageHeader) ||
+            messageData.size() > MAX_CERTIFICATE_SIZE)
+            return {};
 
         const auto* header =
             reinterpret_cast<const SpdmMessageHeader*>(messageData.data());
 
-        // Look up handler in map with mutex protection
         CustomMessageHandler handler;
         {
             std::lock_guard<std::mutex> lock(handlersMutex_);
             auto it =
                 customMessageHandlers_.find(header->request_response_code);
             if (it == customMessageHandlers_.end())
-            {
-                return false; // No handler registered for this message
-            }
+                return {};
             handler = it->second;
         }
 
-        // Call the handler outside the lock
-        std::vector<uint8_t> response = handler(messageData);
+        return handler(messageData);
+    }
 
-        // Send response
-        if (!response.empty() && sendCallback)
-        {
+    /** Legacy: dispatch and immediately send via the registered callback. */
+    bool handleCustomMessage(void* /*spdmContext*/,
+                             const std::vector<uint8_t>& messageData)
+    {
+        std::vector<uint8_t> response = dispatchToHandler(messageData);
+        if (response.empty())
+            return false;
+        if (sendCallback)
             return sendCallback(response.data(), response.size());
-        }
-
-        return !response.empty();
+        return true;
     }
 
     bool hasHandler(uint8_t messageCode) const

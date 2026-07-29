@@ -1,4 +1,5 @@
 #pragma once
+#include <sdbus_calls.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <sdbusplus/asio/aserver.hpp>
@@ -75,7 +76,7 @@ class MeasurementSet :
         using value_types =
             std::tuple<std::vector<size_t>, std::string, size_t>;
         using return_type =
-            std::tuple<sdbusplus::message::object_path, std::string,
+            std::tuple<sdbuscompat::object_path, std::string,
                        std::string, std::string, std::string, std::string>;
     };
     struct exchange_certificate_t
@@ -123,7 +124,7 @@ class MeasurementSet :
 
     static constexpr auto _method_typeid_r_spdm_get_signed_measurements =
         utility::tuple_to_array(
-            message::types::type_id<sdbusplus::message::object_path,
+            message::types::type_id<sdbuscompat::object_path,
                                     std::string, std::string, std::string,
                                     std::string, std::string>());
     static constexpr auto _method_typeid_p_exchange_certificate =
@@ -161,7 +162,7 @@ class MeasurementSet :
             {
                 constexpr auto is_async = std::is_same_v<
                     boost::asio::awaitable<std::tuple<
-                        sdbusplus::message::object_path, std::string,
+                        sdbuscompat::object_path, std::string,
                         std::string, std::string, std::string, std::string>>,
                     decltype(self_i->method_call(
                         spdm_get_signed_measurements_t{}, m,
@@ -239,7 +240,7 @@ class MeasurementSet :
             {
                 constexpr auto is_async [[maybe_unused]] = std::is_same_v<
                     boost::asio::awaitable<std::tuple<
-                        sdbusplus::message::object_path, std::string,
+                        sdbuscompat::object_path, std::string,
                         std::string, std::string, std::string, std::string>>,
                     decltype(self_i->method_call(
                         spdm_get_signed_measurements_t{},

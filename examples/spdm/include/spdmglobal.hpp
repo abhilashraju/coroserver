@@ -53,8 +53,12 @@ extern "C"
 #define LIBSPDM_MAX_SENDER_RECEIVER_BUFFER_SIZE LIBSPDM_RECEIVER_BUFFER_SIZE
 #endif
 
+// LIBSPDM_MAX_SPDM_MSG_SIZE must equal LIBSPDM_DATA_TRANSFER_SIZE when
+// CHUNK_CAP is not set.  The responder validates:
+//   data_transfer_size == max_spdm_msg_size  (when CHUNK_CAP == 0)
+// Defining it as the receiver data-transfer size satisfies this invariant.
 #ifndef LIBSPDM_MAX_SPDM_MSG_SIZE
-#define LIBSPDM_MAX_SPDM_MSG_SIZE 0x1200
+#define LIBSPDM_MAX_SPDM_MSG_SIZE LIBSPDM_DATA_TRANSFER_SIZE
 #endif
 static libspdm_return_t spdm_device_acquire_sender_buffer(void* context,
                                                           void** msg_buf_ptr);
@@ -106,8 +110,9 @@ struct SpdmConnection
         }
         libspdm_register_transport_layer_func(
             spdmContext,
-            LIBSPDM_MAX_SPDM_MSG_SIZE, // define as needed
-            0, 0,                      // header/tail size for TCP
+            LIBSPDM_MAX_SPDM_MSG_SIZE,
+            LIBSPDM_TRANSPORT_HEADER_SIZE,
+            LIBSPDM_TRANSPORT_TAIL_SIZE,
             libspdm_transport_tcp_encode_message,
             libspdm_transport_tcp_decode_message);
 

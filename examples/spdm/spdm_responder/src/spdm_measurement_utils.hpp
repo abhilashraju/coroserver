@@ -9,17 +9,7 @@
 extern "C"
 {
 #include <library/spdm_common_lib.h>
-
-// Forward declaration of libspdm_measurement_collection
-// This function is implemented in the device secret library
-libspdm_return_t libspdm_measurement_collection(
-    void* spdm_context, const uint32_t* session_id,
-    spdm_version_number_t spdm_version, uint8_t measurement_specification,
-    uint32_t measurement_hash_algo, uint8_t measurements_index,
-    uint8_t request_attribute, const uint8_t* nonce, uint8_t slot_id_param,
-    size_t request_context_size, const void* request_context,
-    uint8_t* content_changed, uint8_t* device_measurement_count,
-    void* device_measurement, size_t* device_measurement_size);
+#include <hal/library/responder/measlib.h>
 }
 
 namespace spdm_utils
@@ -55,7 +45,7 @@ inline std::pair<bool, std::pair<std::vector<uint8_t>, uint8_t>>
         SPDM_ALGORITHMS_MEASUREMENT_HASH_ALGO_TPM_ALG_SHA_384,
         measurementOperation,
         0,       // request_attribute
-        nullptr, // nonce
+        nullptr, // requester_nonce
         0,       // slot_id_param
         0,       // request_context_size
         nullptr, // request_context

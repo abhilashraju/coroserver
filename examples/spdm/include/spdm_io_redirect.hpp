@@ -27,7 +27,6 @@ class StdoutRedirector
   private:
     net::io_context& io_context;
     int saved_stdout{-1};
-    int saved_stderr{-1};
     int pipe_fd[2]{-1, -1};
     std::unique_ptr<net::posix::stream_descriptor> stream_desc;
     bool running{false};
@@ -89,15 +88,15 @@ class StdoutRedirector
             return;
         }
 
-        // Save original stdout and stderr
+        // Save original stdout only — stderr is left intact so that the
+        // OStreamLogger (which writes to std::cerr) is never swallowed by the
+        // pipe and lost before io_context.run() drains it.
         saved_stdout = dup(STDOUT_FILENO);
-        saved_stderr = dup(STDERR_FILENO);
 
-        // Redirect stdout and stderr to pipe write end
-        if (dup2(pipe_fd[1], STDOUT_FILENO) == -1 ||
-            dup2(pipe_fd[1], STDERR_FILENO) == -1)
+        // Redirect only stdout to the pipe (libspdm prints via printf/puts)
+        if (dup2(pipe_fd[1], STDOUT_FILENO) == -1)
         {
-            LOG_ERROR("Failed to redirect stdout/stderr");
+            LOG_ERROR("Failed to redirect stdout");
             close(pipe_fd[0]);
             close(pipe_fd[1]);
             return;
@@ -127,16 +126,11 @@ class StdoutRedirector
     {
         running = false;
 
-        // Restore original stdout and stderr
+        // Restore original stdout
         if (saved_stdout != -1)
         {
             dup2(saved_stdout, STDOUT_FILENO);
             close(saved_stdout);
-        }
-        if (saved_stderr != -1)
-        {
-            dup2(saved_stderr, STDERR_FILENO);
-            close(saved_stderr);
         }
 
         // Close stream descriptor (this will cause readLoop to exit)

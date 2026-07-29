@@ -1,5 +1,6 @@
 #include <exception>
 #include <map>
+#include <sdbus_calls.hpp>
 #include <sdbusplus/sdbus.hpp>
 #include <sdbusplus/sdbuspp_support/server.hpp>
 #include <sdbusplus/server.hpp>
@@ -52,7 +53,7 @@ static const auto _param_SPDMGetSignedMeasurements =
                 std::vector<size_t>, std::string, size_t>());
 static const auto _return_SPDMGetSignedMeasurements =
         utility::tuple_to_array(message::types::type_id<
-                sdbusplus::message::object_path, std::string, std::string, std::string, std::string, std::string>());
+                sdbuscompat::object_path, std::string, std::string, std::string, std::string, std::string>());
 }
 }
 int MeasurementSet::_callback_ExchangeCertificate(

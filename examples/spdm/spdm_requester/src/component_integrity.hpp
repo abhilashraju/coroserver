@@ -3,6 +3,7 @@
 #include "worker.hpp"
 
 #include <async_wait.hpp>
+#include <sdbus_calls.hpp>
 #include <sdbusplus/asio/object_server.hpp>
 #include <sdbusplus/bus.hpp>
 #include <xyz/openbmc_project/Attestation/ComponentIntegrity/aserver_asio.hpp>
@@ -56,7 +57,7 @@ class ComponentIntegrity :
 {
   public:
     using MeasurementResult =
-        std::tuple<sdbusplus::message::object_path, std::string, std::string,
+        std::tuple<sdbuscompat::object_path, std::string, std::string,
                    std::string, std::string, std::string>;
 
     struct TcpDeviceInfo
@@ -192,7 +193,7 @@ class ComponentIntegrity :
             {
                 auto& tupleValue = ret.value();
                 return std::make_tuple(
-                    sdbusplus::message::object_path("/some/path"),
+                    sdbuscompat::object_path("/some/path"),
                     std::get<0>(tupleValue), std::get<1>(tupleValue),
                     std::get<2>(tupleValue), std::get<3>(tupleValue),
                     std::get<4>(tupleValue));
