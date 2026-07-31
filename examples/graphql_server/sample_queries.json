@@ -1,0 +1,40 @@
+{
+  "queries": {
+    "getAllUsers": {
+      "description": "Get all users",
+      "query": "{ users }"
+    },
+    "getUserById": {
+      "description": "Get user by ID",
+      "query": "{ user(id: 1) }"
+    },
+    "getAllPosts": {
+      "description": "Get all posts",
+      "query": "{ posts }"
+    },
+    "getPostsByAuthor": {
+      "description": "Get posts by author ID",
+      "query": "{ postsByAuthor(authorId: 1) }"
+    }
+  },
+  "mutations": {
+    "createUser": {
+      "description": "Create a new user",
+      "query": "mutation { createUser(name: \"John Doe\", email: \"john@example.com\", age: 28) }"
+    },
+    "createPost": {
+      "description": "Create a new post",
+      "query": "mutation { createPost(title: \"My First Post\", content: \"This is the content of my first post\", authorId: 1) }"
+    },
+    "updateUser": {
+      "description": "Update an existing user",
+      "query": "mutation { updateUser(id: 1, name: \"Alice Smith\", age: 31) }"
+    }
+  },
+  "examples": {
+    "complexQuery": {
+      "description": "Multiple queries in one request",
+      "query": "{ users posts }"
+    }
+  }
+}
