@@ -12,16 +12,15 @@
  * No thread pool is used.  The io_context is never blocked.
  */
 
+#include "async/libspdm_req_custom_messages_async.hpp"
+#include "async/libspdm_req_get_certificate_async.hpp"
+#include "async/libspdm_req_get_digest_async.hpp"
+#include "async/libspdm_req_get_measurement_async.hpp"
 #include "async_spdm_requester.hpp"
 #include "async_wait.hpp"
 #include "dbusproperty_watcher.hpp"
 #include "logger.hpp"
 #include "sdbus_calls.hpp"
-
-#include "async/libspdm_req_custom_messages_async.hpp"
-#include "async/libspdm_req_get_certificate_async.hpp"
-#include "async/libspdm_req_get_digest_async.hpp"
-#include "async/libspdm_req_get_measurement_async.hpp"
 
 #include <sdbusplus/asio/object_server.hpp>
 #include <sdbusplus/bus.hpp>
@@ -61,9 +60,8 @@ overloaded(Ts...) -> overloaded<Ts...>;
 
 class AsyncComponentIntegrity;
 
-using ComponentIntegrityIface =
-    sdbusplus::asio::aserver::xyz::openbmc_project::attestation::
-        ComponentIntegrity<AsyncComponentIntegrity, void>;
+using ComponentIntegrityIface = sdbusplus::asio::aserver::xyz::openbmc_project::
+    attestation::ComponentIntegrity<AsyncComponentIntegrity, void>;
 using IdentityAuthenticationIface =
     sdbusplus::asio::aserver::xyz::openbmc_project::attestation::
         IdentityAuthentication<AsyncComponentIntegrity, void>;
@@ -132,11 +130,20 @@ class AsyncComponentIntegrity :
         deviceInfo_(std::move(deviceInfo))
     {}
 
-    net::io_context& getContextRef() noexcept { return ioContext_; }
+    net::io_context& getContextRef() noexcept
+    {
+        return ioContext_;
+    }
 
     // ── ComponentIntegrity properties ─────────────────────────────────────
-    bool enabled() const { return true; }
-    bool enabled(bool v, bool) { return v; }
+    bool enabled() const
+    {
+        return true;
+    }
+    bool enabled(bool v, bool)
+    {
+        return v;
+    }
 
     ComponentIntegrityIface::SecurityTechnologyType type() const
     {
@@ -148,11 +155,23 @@ class AsyncComponentIntegrity :
         return v;
     }
 
-    std::string typeVersion() const { return "1.1"; }
-    std::string typeVersion(std::string v, bool) { return v; }
+    std::string typeVersion() const
+    {
+        return "1.1";
+    }
+    std::string typeVersion(std::string v, bool)
+    {
+        return v;
+    }
 
-    uint64_t lastUpdated() const { return 0; }
-    uint64_t lastUpdated(uint64_t v, bool) { return v; }
+    uint64_t lastUpdated() const
+    {
+        return 0;
+    }
+    uint64_t lastUpdated(uint64_t v, bool)
+    {
+        return v;
+    }
 
     // ── MeasurementSet::spdmGetSignedMeasurements ─────────────────────────
     net::awaitable<MeasurementResult> method_call(
@@ -167,8 +186,8 @@ class AsyncComponentIntegrity :
         constexpr size_t kMaxDigestBuf = 8 * 48; // 8 slots × 48-byte SHA384
         std::vector<uint8_t> digestBuf(kMaxDigestBuf, 0);
         uint8_t slotMask = 0;
-        auto status = co_await libspdm_get_digest_async(
-            ctx, nullptr, &slotMask, digestBuf.data(), io);
+        auto status = co_await libspdm_get_digest_async(ctx, nullptr, &slotMask,
+                                                        digestBuf.data(), io);
         if (LIBSPDM_STATUS_IS_ERROR(status))
         {
             LOG_ERROR("getSignedMeasurements: GET_DIGESTS failed 0x{:x}",
@@ -200,8 +219,8 @@ class AsyncComponentIntegrity :
             status = co_await libspdm_get_measurement_async(
                 ctx, nullptr,
                 0, // no signature requested
-                static_cast<uint8_t>(idx),
-                static_cast<uint8_t>(slotId), &numBlocks, meas, io);
+                static_cast<uint8_t>(idx), static_cast<uint8_t>(slotId),
+                &numBlocks, meas, io);
             if (LIBSPDM_STATUS_IS_ERROR(status))
             {
                 LOG_ERROR(
@@ -225,9 +244,13 @@ class AsyncComponentIntegrity :
             spdmCtx->connection_info.algorithm.base_asym_algo);
         std::string certPem = derChainToPem(certChain);
 
-        co_return MeasurementResult{sdbuscompat::object_path("/some/path"),
-                                    hashAlgo, certPem, measBase64, signAlgo,
-                                    "1.1"};
+        co_return MeasurementResult{
+            sdbuscompat::object_path("/some/path"),
+            hashAlgo,
+            certPem,
+            measBase64,
+            signAlgo,
+            "1.1"};
     }
 
     // ── MeasurementSet::exchangeCertificate ───────────────────────────────
@@ -246,13 +269,14 @@ class AsyncComponentIntegrity :
 
         // Push requester cert to responder
         void* ctx = requester_->getSpdmContext();
-        bool ok = co_await asyncPushCertificate(certBytes,
-                                                CertificateFormat::PEM, ctx, io);
+        bool ok = co_await asyncPushCertificate(
+            certBytes, CertificateFormat::PEM, ctx, io);
         if (!ok)
         {
             LOG_ERROR("exchangeCertificate: PUSH_CERTIFICATE failed");
             throw sdbusplus::xyz::openbmc_project::Common::Error::Unavailable();
         }
+        LOG_DEBUG("Push certificate succcesful");
 
         // Pull responder cert
         std::vector<uint8_t> responderCert;
@@ -264,9 +288,8 @@ class AsyncComponentIntegrity :
             throw sdbusplus::xyz::openbmc_project::Common::Error::Unavailable();
         }
 
-        std::string certPath = storeCert(responderCert,
-                                         "/etc/ssl/certs/authority",
-                                         "responder_async");
+        std::string certPath = storeCert(
+            responderCert, "/etc/ssl/certs/authority", "responder_async");
         LOG_INFO("exchangeCertificate: stored responder cert at {}", certPath);
         co_return std::make_tuple(true, certPath);
     }
@@ -280,7 +303,8 @@ class AsyncComponentIntegrity :
         bool ok = co_await asyncSetProvisioned(provisioned, ctx, io);
         if (!ok)
         {
-            LOG_ERROR("setProvisioned: SET_PROVISIONED({}) failed", provisioned);
+            LOG_ERROR("setProvisioned: SET_PROVISIONED({}) failed",
+                      provisioned);
             throw sdbusplus::xyz::openbmc_project::Common::Error::Unavailable();
         }
         co_return true;
@@ -306,8 +330,9 @@ class AsyncComponentIntegrity :
         std::string path = std::format(CompIntegrityPath, deviceInfo.id());
         if (spdmDevices.count(path))
         {
-            LOG_DEBUG("AsyncComponentIntegrity: already active for {}, skipping",
-                      deviceInfo.id());
+            LOG_DEBUG(
+                "AsyncComponentIntegrity: already active for {}, skipping",
+                deviceInfo.id());
             return;
         }
 
@@ -317,8 +342,8 @@ class AsyncComponentIntegrity :
 
         net::co_spawn(
             ioContext,
-            [&ioContext, conn, deviceInfo = std::move(deviceInfo),
-             retry, path]() -> net::awaitable<void> {
+            [&ioContext, conn, deviceInfo = std::move(deviceInfo), retry,
+             path]() -> net::awaitable<void> {
                 std::string host;
                 int port = 0;
                 if (std::holds_alternative<TcpDeviceInfo>(deviceInfo.info))
@@ -329,8 +354,8 @@ class AsyncComponentIntegrity :
                 }
 
                 // Exponential back-off: 5s, 10s, 20s, … capped at 60s.
-                auto delay = std::chrono::seconds(
-                    std::min(5 * (1 << retry), 60));
+                auto delay =
+                    std::chrono::seconds(std::min(5 * (1 << retry), 60));
 
                 if (retry > 0)
                 {
@@ -440,8 +465,8 @@ class AsyncComponentIntegrity :
             if (!libspdm_x509_get_cert_from_cert_chain(
                     chain.data(), chain.size(), idx, &certPtr, &certLen))
                 break;
-            std::string b64 = encodeBase64(
-                std::vector<uint8_t>(certPtr, certPtr + certLen));
+            std::string b64 =
+                encodeBase64(std::vector<uint8_t>(certPtr, certPtr + certLen));
             pem += "-----BEGIN CERTIFICATE-----\n";
             for (size_t j = 0; j < b64.size(); j += 64)
                 pem += b64.substr(j, 64) + "\n";
@@ -462,8 +487,8 @@ class AsyncComponentIntegrity :
     }
 
     static std::string storeCert(const std::vector<uint8_t>& cert,
-                                  const std::string& dir,
-                                  const std::string& name)
+                                 const std::string& dir,
+                                 const std::string& name)
     {
         std::string path = dir + "/" + name + ".pem";
         std::ofstream f(path, std::ios::binary | std::ios::trunc);

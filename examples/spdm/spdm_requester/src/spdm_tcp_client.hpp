@@ -113,5 +113,3 @@ class SpdmTcpClient
     uint16_t port;
     OnCloseCallback onCloseCallback;
 };
-
-// Made with Bob
