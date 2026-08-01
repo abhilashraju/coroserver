@@ -47,10 +47,25 @@ class TypedSchema
         rootQueries[fieldSpec.name] = std::move(fieldSpec);
     }
 
+    void addRootSubscription(FieldSpec fieldSpec)
+    {
+        rootSubscriptions[fieldSpec.name] = std::move(fieldSpec);
+    }
+
     const FieldSpec* getRootQueryField(const std::string& name) const
     {
         auto it = rootQueries.find(name);
         if (it == rootQueries.end())
+        {
+            return nullptr;
+        }
+        return &it->second;
+    }
+
+    const FieldSpec* getRootSubscriptionField(const std::string& name) const
+    {
+        auto it = rootSubscriptions.find(name);
+        if (it == rootSubscriptions.end())
         {
             return nullptr;
         }
@@ -69,17 +84,22 @@ class TypedSchema
 
     void validateOperation(const Operation& operation) const
     {
-        if (operation.type != Operation::Type::Query)
+        if (operation.type != Operation::Type::Query &&
+            operation.type != Operation::Type::Subscription)
         {
-            throw std::runtime_error("Only query operations are supported");
+            throw std::runtime_error(
+                "Only query and subscription operations are supported");
         }
 
         for (const FieldSelection& selection : operation.selections)
         {
-            const FieldSpec* fieldSpec = getRootQueryField(selection.name);
+            const FieldSpec* fieldSpec =
+                (operation.type == Operation::Type::Subscription)
+                    ? getRootSubscriptionField(selection.name)
+                    : getRootQueryField(selection.name);
             if (fieldSpec == nullptr)
             {
-                throw std::runtime_error("Unknown query field: " + selection.name);
+                throw std::runtime_error("Unknown field: " + selection.name);
             }
             validateArguments(selection, *fieldSpec);
             if (!fieldSpec->scalar)
@@ -167,6 +187,7 @@ class TypedSchema
     }
 
     std::unordered_map<std::string, FieldSpec> rootQueries;
+    std::unordered_map<std::string, FieldSpec> rootSubscriptions;
     std::unordered_map<std::string, ObjectSpec> objects;
 };
 

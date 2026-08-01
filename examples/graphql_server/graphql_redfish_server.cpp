@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -16,17 +17,39 @@ int main(int argc, const char* argv[])
 {
     try
     {
-        auto [cert, port, host, targetPort, user, password] = getArgs(
-            parseCommandline(argc, argv), "--cert,-c", "--port,-p", "--host,-h",
-            "--target-port,-t", "--user,-u", "--password,-w");
+        auto [cert, port, host, targetPort, user, password, clientCert,
+              clientKey] =
+            getArgs(parseCommandline(argc, argv), "--cert,-c", "--port,-p",
+                    "--host,-h", "--target-port,-t", "--user,-u",
+                    "--password,-w", "--client-cert,-C", "--client-key,-K");
+
+        // Require at least one authentication method.
+        bool hasBasicAuth = user.has_value() && password.has_value();
+        bool hasMtls = clientCert.has_value() && clientKey.has_value();
+        if (!hasBasicAuth && !hasMtls)
+        {
+            LOG_ERROR(
+                "Authentication required: provide either "
+                "--user/-u and --password/-w (basic auth) "
+                "or --client-cert/-C and --client-key/-K (mTLS)");
+            return 1;
+        }
 
         boost::asio::io_context ioContext;
 
         RedfishProviderConfig providerConfig;
         providerConfig.host = host ? std::string(*host) : "localhost";
         providerConfig.port = targetPort ? std::string(*targetPort) : "443";
-        providerConfig.username = user ? std::string(*user) : "root";
-        providerConfig.password = password ? std::string(*password) : "0penBmc";
+        if (hasBasicAuth)
+        {
+            providerConfig.username = std::string(*user);
+            providerConfig.password = std::string(*password);
+        }
+        if (hasMtls)
+        {
+            providerConfig.clientCertFile = std::string(*clientCert);
+            providerConfig.clientKeyFile = std::string(*clientKey);
+        }
 
         auto provider =
             std::make_shared<HttpRedfishProvider>(ioContext, providerConfig);
@@ -103,9 +126,49 @@ int main(int argc, const char* argv[])
                       {"systems", "List Redfish systems"},
                       {"system", "Get a Redfish system by id"},
                       {"chassis", "List Redfish chassis"},
-                      {"managers", "List Redfish managers"}}}};
+                      {"managers", "List Redfish managers"}}},
+                    {"subscriptions",
+                     {{"systemStatus",
+                       "Stream live updates for a ComputerSystem (arg: id)"},
+                      {"chassisStatus",
+                       "Stream live updates for a Chassis (arg: id)"}}}};
                 return make_success_response(schemaDoc, http::status::ok,
                                              req.version());
+            });
+
+        // SSE subscription endpoint
+        // GET /graphql/subscribe?query=subscription{systemStatus(id:"1"){...}}
+        // Optional: &interval=5  (poll interval in seconds, default 5)
+        router.add_sse_handler(
+            "/graphql/subscribe",
+            [executor](Request& req, const http_function& params,
+                       SseWriter writer) -> net::awaitable<void> {
+                // parse_function already split and URL-decoded the query string
+                std::string query = params["query"];
+                std::string intervalStr = params["interval"];
+
+                if (query.empty())
+                {
+                    nlohmann::json err = {{"errors",
+                                           {{{"message",
+                                              "Missing 'query' query-string "
+                                              "parameter"}}}}};
+                    co_await writer.write(err.dump());
+                    co_return;
+                }
+
+                int intervalSecs =
+                    intervalStr.empty() ? 5 : std::stoi(intervalStr);
+                auto interval = std::chrono::seconds(intervalSecs);
+
+                co_await executor->executeSubscription(
+                    query, nlohmann::json::object(), interval,
+                    [&writer](nlohmann::json event) -> net::awaitable<bool> {
+                        // Serialize the event and push it to the SSE stream.
+                        // writer.write returns false when the client has gone.
+                        bool ok = co_await writer.write(event.dump());
+                        co_return ok;
+                    });
             });
 
         int serverPort = port ? std::stoi(std::string(*port)) : 8444;

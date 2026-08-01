@@ -3,7 +3,7 @@ Description=Redfish GraphQL Service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/graphql_redfish_server -p 8444 --host localhost --target-port 443 --user service --password 0penBmc
+ExecStart=/usr/bin/graphql_redfish_server -p 8444 --host bmc.peer --target-port 443 -C /etc/ssl/certs/https/client_cert.pem -K /etc/ssl/private/client_pkey.pem
 Restart=always
 RestartSec=5
 Type=simple

@@ -12,16 +12,17 @@ A zero-external-dependency, coroutine-based GraphQL server framework built on to
 4. [Core Abstractions](#core-abstractions)
 5. [Building & Running](#building--running)
 6. [Redfish Example — Queries](#redfish-example--queries)
-7. [Creating a Domain-Specific GraphQL Server](#creating-a-domain-specific-graphql-server)
+7. [Redfish Example — Subscriptions (SSE)](#redfish-example--subscriptions-sse)
+8. [Creating a Domain-Specific GraphQL Server](#creating-a-domain-specific-graphql-server)
    - [Step 1 — Define Object Types in the Schema](#step-1--define-object-types-in-the-schema)
    - [Step 2 — Register Root Queries](#step-2--register-root-queries)
    - [Step 3 — Implement the Data Provider](#step-3--implement-the-data-provider)
    - [Step 4 — Implement the Executor](#step-4--implement-the-executor)
    - [Step 5 — Wire the Server Entry Point](#step-5--wire-the-server-entry-point)
-8. [Full Walk-through: Inventory GraphQL Server](#full-walk-through-inventory-graphql-server)
-9. [API Endpoints](#api-endpoints)
-10. [File Reference](#file-reference)
-11. [Dependencies](#dependencies)
+9. [Full Walk-through: Inventory GraphQL Server](#full-walk-through-inventory-graphql-server)
+10. [API Endpoints](#api-endpoints)
+11. [File Reference](#file-reference)
+12. [Dependencies](#dependencies)
 
 ---
 
@@ -293,6 +294,248 @@ curl -k -X POST https://localhost:8444/graphql \
   -d '{
     "query": "{ bmc: managers { id name status { health } } allChassis: chassis { id name } }"
   }'
+```
+
+---
+
+## Redfish Example — Subscriptions (SSE)
+
+GraphQL **subscriptions** let a client listen for live data changes without polling.
+The server uses **Server-Sent Events (SSE)** over a persistent HTTPS `GET` connection.
+Each poll cycle re-fetches the target Redfish resource and pushes the result as a
+JSON event on the stream.
+
+### Available subscription fields
+
+| Field | Redfish target | Required argument |
+|-------|---------------|-------------------|
+| `systemStatus` | `/redfish/v1/Systems/{id}` | `id: ID!` |
+| `chassisStatus` | `/redfish/v1/Chassis/{id}` | `id: ID!` |
+| `ethernetInterfaceUpdates` | `/redfish/v1/Managers/bmc/EthernetInterfaces` (all members) | none |
+
+### Endpoint
+
+```
+GET /graphql/subscribe?query=<subscription-document>[&interval=<seconds>]
+```
+
+| Query-string parameter | Default | Description |
+|------------------------|---------|-------------|
+| `query` | — (required) | URL-encoded GraphQL subscription document |
+| `interval` | `5` | Poll interval in seconds |
+
+The response uses:
+
+```
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Transfer-Encoding: chunked
+```
+
+Each event is delivered as:
+
+```
+data: {"data":{"systemStatus":{"id":"1","powerState":"On","status":{"health":"OK"}}}}
+
+data: {"data":{"systemStatus":{"id":"1","powerState":"On","status":{"health":"OK"}}}}
+```
+
+### Watch a system's power state and health
+
+```bash
+# URL-encode spaces as '+' or %20 in the query string
+curl -k -N \
+  'https://localhost:8444/graphql/subscribe?query=subscription+%7B+systemStatus(id%3A+"1")+%7B+id+powerState+status+%7B+health+state+%7D+%7D+%7D&interval=5'
+```
+
+Decoded subscription document sent in the `query` parameter:
+
+```graphql
+subscription {
+  systemStatus(id: "1") {
+    id
+    powerState
+    status {
+      health
+      state
+    }
+  }
+}
+```
+
+### Watch chassis status every 10 seconds
+
+```bash
+curl -k -N \
+  'https://localhost:8444/graphql/subscribe?query=subscription+%7B+chassisStatus(id%3A+"1")+%7B+id+name+status+%7B+health+%7D+%7D+%7D&interval=10'
+```
+
+Decoded:
+
+```graphql
+subscription {
+  chassisStatus(id: "1") {
+    id
+    name
+    status {
+      health
+    }
+  }
+}
+```
+
+### Consuming events from JavaScript (browser / Node.js)
+
+```javascript
+const url =
+  'https://bmc-host:8444/graphql/subscribe' +
+  '?query=' + encodeURIComponent('subscription { systemStatus(id: "1") { id powerState status { health } } }') +
+  '&interval=5';
+
+const es = new EventSource(url);
+
+es.onmessage = (event) => {
+  const payload = JSON.parse(event.data);
+  if (payload.errors) {
+    console.error('Subscription error:', payload.errors);
+    es.close();
+    return;
+  }
+  const sys = payload.data.systemStatus;
+  console.log(`[${new Date().toISOString()}] ${sys.id} — power: ${sys.powerState}, health: ${sys.status.health}`);
+};
+
+es.onerror = () => { es.close(); };
+```
+
+### Watch network addresses of all interfaces
+
+`ethernetInterfaceUpdates` is a **list subscription** — every event delivers the full
+set of network interfaces with their live IP addresses.
+
+```bash
+curl -k -N \
+  'https://localhost:8444/graphql/subscribe?query=subscription+%7B+ethernetInterfaceUpdates+%7B+id+macAddress+linkStatus+ipv4Addresses+%7B+address+subnetMask+%7D+ipv6Addresses+%7B+address+%7D+%7D+%7D&interval=10'
+```
+
+Decoded subscription document:
+
+```graphql
+subscription {
+  ethernetInterfaceUpdates {
+    id
+    macAddress
+    linkStatus
+    ipv4Addresses {
+      address
+      subnetMask
+    }
+    ipv6Addresses {
+      address
+    }
+  }
+}
+```
+
+Example event pushed every 10 seconds:
+
+```json
+{
+  "data": {
+    "ethernetInterfaceUpdates": [
+      {
+        "id": "eth0",
+        "macAddress": "aa:bb:cc:dd:ee:ff",
+        "linkStatus": "LinkUp",
+        "ipv4Addresses": [{ "address": "192.168.1.10", "subnetMask": "255.255.255.0" }],
+        "ipv6Addresses": [{ "address": "fe80::1" }]
+      },
+      {
+        "id": "eth1",
+        "macAddress": "aa:bb:cc:dd:ee:00",
+        "linkStatus": "LinkDown",
+        "ipv4Addresses": [],
+        "ipv6Addresses": []
+      }
+    ]
+  }
+}
+```
+
+Because this is a list subscription, the server fetches the collection index
+(`/redfish/v1/Managers/bmc/EthernetInterfaces`) and then issues a live
+`getFresh()` GET for **each member** on every poll cycle — so you always see
+the current state of every interface in a single event.
+
+### Adding a new subscription field
+
+Only two steps are needed for any new field — the SSE transport, poll loop,
+JSON projection and field selection all happen automatically.
+
+**Step 1 — Register in [`graphql_redfish_schema.cpp`](graphql_redfish_schema.cpp)**
+
+Reuse any `ObjectSpec` type already defined for queries:
+
+```cpp
+// Object subscription (single resource, requires an id argument)
+schema.addRootSubscription(
+    {"myField", "", "ExistingType", false, false, {{"id", "ID", true}}});
+
+// List subscription (entire collection, no arguments)
+schema.addRootSubscription(
+    {"myListField", "", "ExistingType", true, false});
+```
+
+**Step 2 — Resolve in [`graphql_redfish_executor.cpp`](graphql_redfish_executor.cpp)**
+
+Add one `else if` branch inside `resolveSubscriptionField()`:
+
+```cpp
+// Object/scalar — single resource
+else if (selection.name == "myField")
+{
+    nlohmann::json args = resolveArguments(selection, variables);
+    target = "/redfish/v1/SomeResource/" + args["id"].get<std::string>();
+    // falls through to the getFresh() call at the bottom
+}
+
+// List — expand the collection on every poll
+else if (selection.name == "myListField")
+{
+    nlohmann::json col = co_await provider->getFresh("/redfish/v1/SomeCollection");
+    nlohmann::json result = nlohmann::json::array();
+    for (const auto& member : col["Members"])
+    {
+        nlohmann::json item =
+            co_await provider->getFresh(member["@odata.id"].get<std::string>());
+        result.push_back(
+            co_await projectObject(item, fieldSpec.returnType, selection.selections));
+    }
+    co_return result;
+}
+```
+
+`getFresh()` always bypasses the local cache so every poll delivers live BMC state.
+
+### How it works internally
+
+```
+Client  ──GET /graphql/subscribe?query=...──►  HttpServer
+                                                   │
+                                          SSE headers written
+                                          (chunked, text/event-stream)
+                                                   │
+                                         TypedExecutor::executeSubscription()
+                                                   │
+                            ┌──────────────────────┘
+                            │  loop every <interval>:
+                            │    resolveSubscriptionField()
+                            │      └─► provider->getFresh(target)
+                            │              └─► Redfish BMC  (live HTTP GET)
+                            │    onEvent(json)  ──► SseWriter::write()
+                            │      └─► "data: {...}\n\n"  sent to client
+                            └──────────────────────►  repeat
 ```
 
 ---
@@ -692,7 +935,8 @@ HttpRouter → /graphql handler
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/graphql` | Execute a GraphQL query or mutation |
+| `POST` | `/graphql` | Execute a GraphQL query |
+| `GET` | `/graphql/subscribe` | Open an SSE stream for a GraphQL subscription |
 | `GET` | `/health` | Service health check |
 | `GET` | `/schema` | Human-readable schema summary (JSON) |
 
@@ -734,7 +978,7 @@ HttpRouter → /graphql handler
 | [`include/graphql/util.hpp`](include/graphql/util.hpp) | `argumentsToJson()` and other helpers |
 | [`graphql_redfish_schema.cpp`](graphql_redfish_schema.cpp) | Builds the Redfish `TypedSchema` |
 | [`graphql_redfish_provider.hpp`](graphql_redfish_provider.hpp) | `RedfishProvider` interface + `HttpRedfishProvider` |
-| [`graphql_redfish_executor.cpp`](graphql_redfish_executor.cpp) | `resolveRootField()` for all Redfish queries |
+| [`graphql_redfish_executor.cpp`](graphql_redfish_executor.cpp) | `resolveRootField()` for queries; `resolveSubscriptionField()` for live subscriptions |
 | [`graphql_redfish_server.cpp`](graphql_redfish_server.cpp) | `main()`: wires schema, provider, executor, HTTP server |
 | [`meson.build`](meson.build) | Build definition |
 

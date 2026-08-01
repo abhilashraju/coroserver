@@ -110,6 +110,14 @@ graphql::TypedSchema buildRedfishTypedSchema()
     schema.addRootQuery(
         {"managerNetworkProtocol", "", "ManagerNetworkProtocol", false, false});
 
+    // Subscriptions — clients can listen for periodic updates on these fields
+    schema.addRootSubscription(
+        {"systemStatus", "", "ComputerSystem", false, false, {{"id", "ID", true}}});
+    schema.addRootSubscription(
+        {"chassisStatus", "", "Chassis", false, false, {{"id", "ID", true}}});
+    schema.addRootSubscription(
+        {"ethernetInterfaceUpdates", "", "EthernetInterface", true, false});
+
     return schema;
 }
 

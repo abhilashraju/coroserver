@@ -24,6 +24,11 @@ class RedfishGraphQLExecutor : public graphql::TypedExecutor<RedfishProvider>
         const graphql::FieldSelection& selection,
         const graphql::FieldSpec& fieldSpec,
         const nlohmann::json& variables) override;
+
+    boost::asio::awaitable<nlohmann::json> resolveSubscriptionField(
+        const graphql::FieldSelection& selection,
+        const graphql::FieldSpec& fieldSpec,
+        const nlohmann::json& variables) override;
 };
 
 } // namespace NSNAME

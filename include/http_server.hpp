@@ -7,8 +7,19 @@
 #include "socket_streams.hpp"
 
 #include <concepts>
+#include <functional>
+#include <unordered_map>
 namespace NSNAME
 {
+
+// A write-only handle passed to SSE handlers so they can push events
+// to the client without holding a reference to the raw socket.
+struct SseWriter
+{
+    // Write one SSE event.  Returns false when the connection is gone.
+    std::function<boost::asio::awaitable<bool>(std::string /*data*/)> write;
+};
+
 template <typename T>
 concept AwaitableResponseHandler =
     requires(T t, Request& req, const http_function& params) {
@@ -31,6 +42,14 @@ auto make_awitable_handler(HandlerFunc&& h)
     return [h = std::forward<HandlerFunc>(h)](auto& req, auto& params)
                -> net::awaitable<Response> { co_return h(req, params); };
 }
+
+// Concept for SSE streaming handlers: (Request&, http_function&, SseWriter) -> awaitable<void>
+template <typename T>
+concept SseHandler =
+    requires(T t, Request& req, const http_function& params, SseWriter w) {
+        { t(req, params, w) } -> std::same_as<net::awaitable<void>>;
+    };
+
 struct HttpRouter
 {
     struct handler_base
@@ -95,6 +114,34 @@ struct HttpRouter
     {
         add_handler({{path.data(), path.length()}, http::verb::delete_},
                     (FUNC&&)h);
+    }
+
+    // Register a Server-Sent Events streaming handler.
+    // The handler receives an SseWriter and is expected to co_await it
+    // indefinitely (or until the client disconnects).
+    // Internally stored as a type-erased std::function.
+    template <SseHandler FUNC>
+    void add_sse_handler(std::string_view path, FUNC&& h)
+    {
+        sse_handlers[std::string(path)] =
+            [h = std::forward<FUNC>(h)](Request& req,
+                                        const http_function& params,
+                                        SseWriter writer) -> net::awaitable<void> {
+            co_await h(req, params, writer);
+        };
+    }
+
+    using SseHandlerFn = std::function<net::awaitable<void>(
+        Request&, const http_function&, SseWriter)>;
+
+    SseHandlerFn* findSseHandler(const std::string& path)
+    {
+        auto it = sse_handlers.find(path);
+        if (it == sse_handlers.end())
+        {
+            return nullptr;
+        }
+        return &it->second;
     }
 
     // Set a fallback handler that will be called when no route matches
@@ -163,6 +210,7 @@ struct HttpRouter
     HANDLER_MAP post_handlers;
     HANDLER_MAP delete_handlers;
     HANDLER_MAP empty_handlers;
+    std::unordered_map<std::string, SseHandlerFn> sse_handlers;
     std::optional<std::reference_wrapper<net::io_context>> ioc;
 };
 
@@ -222,6 +270,18 @@ class HttpServer
         }
 
         std::cout << "Received request: " << req.body().data() << std::endl;
+
+        // Check if this is an SSE subscription request
+        auto httpfunc = parse_function(req.target());
+        if (req.method() == http::verb::get)
+        {
+            if (auto* sseFn = router_.findSseHandler(httpfunc.name()))
+            {
+                co_await handle_sse_client(socket, req, httpfunc, *sseFn);
+                co_return;
+            }
+        }
+
         Response res;
         try
         {
@@ -251,6 +311,64 @@ class HttpServer
             std::cerr << "Error shutting down SSL: " << ec.message()
                       << std::endl;
         }
+    }
+
+    // Handle a long-lived SSE connection: send headers then delegate to the
+    // registered SSE handler which writes events via SseWriter.
+    template <typename Socket>
+    boost::asio::awaitable<void> handle_sse_client(
+        std::shared_ptr<boost::asio::ssl::stream<Socket>> socket, Request& req,
+        const http_function& httpfunc, HttpRouter::SseHandlerFn& sseFn)
+    {
+        // Send SSE response headers (no body yet — keep connection open)
+        http::response<http::empty_body> headRes{http::status::ok,
+                                                 req.version()};
+        headRes.set(http::field::content_type, "text/event-stream");
+        headRes.set(http::field::cache_control, "no-cache");
+        headRes.set(http::field::connection, "keep-alive");
+        headRes.set("Access-Control-Allow-Origin", "*");
+        headRes.chunked(true);
+
+        boost::system::error_code ec;
+        http::response_serializer<http::empty_body> sr{headRes};
+        co_await http::async_write_header(
+            *socket, sr,
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        if (ec)
+        {
+            co_return;
+        }
+
+        // Build an SseWriter that writes raw SSE chunks directly to the socket
+        SseWriter writer;
+        writer.write = [&socket](std::string data) -> net::awaitable<bool> {
+            // SSE frame: "data: <payload>\n\n"
+            std::string frame = "data: " + data + "\n\n";
+            // Write as a chunked body piece
+            auto buf = net::buffer(frame);
+            boost::system::error_code wec;
+            co_await net::async_write(
+                *socket, http::make_chunk(buf),
+                boost::asio::redirect_error(boost::asio::use_awaitable, wec));
+            co_return !wec;
+        };
+
+        try
+        {
+            co_await sseFn(req, httpfunc, writer);
+        }
+        catch (...)
+        {
+            // Client disconnected or handler threw — fall through to close
+        }
+
+        // Send chunked terminator
+        co_await net::async_write(
+            *socket, http::make_chunk_last(),
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+
+        co_await socket->async_shutdown(
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
     }
 
     boost::asio::io_context& context;

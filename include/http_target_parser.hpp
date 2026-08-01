@@ -12,8 +12,8 @@ struct http_function
     struct parameter
     {
         std::string_view name;
-        std::string_view value;
-        parameter(std::string_view n, std::string_view v) :
+        std::string value; // owns decoded content
+        parameter(std::string_view n, std::string v) :
             name(std::move(n)), value(std::move(v))
         {}
     };
@@ -57,6 +57,45 @@ std::string to_string(std::string_view vw)
     return std::string(vw.data(), vw.length());
 }
 
+// Decode a URL-encoded string: %XX hex escapes and '+' → space.
+inline std::string url_decode(std::string_view s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size(); ++i)
+    {
+        if (s[i] == '+')
+        {
+            out += ' ';
+        }
+        else if (s[i] == '%' && i + 2 < s.size())
+        {
+            auto hexNibble = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                return -1;
+            };
+            int hi = hexNibble(s[i + 1]);
+            int lo = hexNibble(s[i + 2]);
+            if (hi >= 0 && lo >= 0)
+            {
+                out += static_cast<char>((hi << 4) | lo);
+                i += 2;
+            }
+            else
+            {
+                out += s[i]; // leave malformed % literal
+            }
+        }
+        else
+        {
+            out += s[i];
+        }
+    }
+    return out;
+}
+
 inline http_function parse_function(std::string_view target)
 {
     auto index = target.find_last_of("/");
@@ -74,7 +113,7 @@ inline http_function parse_function(std::string_view target)
         for (auto& p : params)
         {
             auto pairs = split(p, '=');
-            parampairs.emplace_back(pairs[0], pairs[1]);
+            parampairs.emplace_back(pairs[0], url_decode(pairs[1]));
         }
         return http_function{to_string(func), std::move(parampairs)};
     }
@@ -95,10 +134,11 @@ void extract_params_from_path(http_function& func,
                        if (s1[0] == '{' && s1.back() == '}')
                        {
                            return http_function::parameter{
-                               s1.substr(1, s1.length() - 2), s2};
+                               s1.substr(1, s1.length() - 2),
+                               std::string(s2)};
                        }
 
-                       return http_function::parameter{s1, ""};
+                       return http_function::parameter{s1, std::string{}};
                    });
 }
 }

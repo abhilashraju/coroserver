@@ -13,6 +13,14 @@ HttpRedfishProvider::HttpRedfishProvider(boost::asio::io_context& io,
 {
     sslContext.set_default_verify_paths();
     sslContext.set_verify_mode(boost::asio::ssl::verify_none);
+
+    if (!config.clientCertFile.empty() && !config.clientKeyFile.empty())
+    {
+        sslContext.use_certificate_chain_file(config.clientCertFile);
+        sslContext.use_private_key_file(config.clientKeyFile,
+                                        boost::asio::ssl::context::pem);
+    }
+
     client.withHost(config.host)
         .withPort(config.port)
         .withProtocol(config.protocol)
@@ -47,6 +55,29 @@ boost::asio::awaitable<nlohmann::json> HttpRedfishProvider::get(
     }
 
     cache.emplace(target, parsed);
+    co_return parsed;
+}
+
+boost::asio::awaitable<nlohmann::json> HttpRedfishProvider::getFresh(
+    const std::string& target)
+{
+    RedfishClient::Request request;
+    request.withMethod(http::verb::get).withTarget(target).witKeepAlive(false);
+
+    auto [ec, response] = co_await client.execute(request);
+    if (ec)
+    {
+        throw std::runtime_error("Failed Redfish request for '" + target +
+                                 "': " + ec.message());
+    }
+
+    nlohmann::json parsed =
+        nlohmann::json::parse(response.body(), nullptr, false);
+    if (parsed.is_discarded())
+    {
+        throw std::runtime_error("Invalid JSON response for '" + target + "'");
+    }
+
     co_return parsed;
 }
 

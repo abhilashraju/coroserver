@@ -78,4 +78,56 @@ boost::asio::awaitable<nlohmann::json> RedfishGraphQLExecutor::resolveRootField(
                                      selection.selections);
 }
 
+boost::asio::awaitable<nlohmann::json>
+RedfishGraphQLExecutor::resolveSubscriptionField(
+    const graphql::FieldSelection& selection,
+    const graphql::FieldSpec& fieldSpec, const nlohmann::json& variables)
+{
+    nlohmann::json args = resolveArguments(selection, variables);
+    std::string target;
+
+    if (selection.name == "systemStatus")
+    {
+        target = "/redfish/v1/Systems/" + args["id"].get<std::string>();
+    }
+    else if (selection.name == "chassisStatus")
+    {
+        target = "/redfish/v1/Chassis/" + args["id"].get<std::string>();
+    }
+    else if (selection.name == "ethernetInterfaceUpdates")
+    {
+        // List subscription — fetch the collection then expand each member
+        nlohmann::json collection =
+            co_await provider->getFresh("/redfish/v1/Managers/bmc/EthernetInterfaces");
+
+        if (!collection.contains("Members") || !collection["Members"].is_array())
+        {
+            throw std::runtime_error(
+                "Expected Members array for EthernetInterfaces");
+        }
+
+        nlohmann::json result = nlohmann::json::array();
+        for (const auto& member : collection["Members"])
+        {
+            if (!member.contains("@odata.id"))
+                continue;
+            nlohmann::json item =
+                co_await provider->getFresh(member["@odata.id"].get<std::string>());
+            result.push_back(co_await projectObject(
+                item, fieldSpec.returnType, selection.selections));
+        }
+        co_return result;
+    }
+    else
+    {
+        throw std::runtime_error("Unsupported subscription field: " +
+                                 selection.name);
+    }
+
+    // scalar/object subscription (non-list path)
+    nlohmann::json payload = co_await provider->getFresh(target);
+    co_return co_await projectObject(payload, fieldSpec.returnType,
+                                     selection.selections);
+}
+
 } // namespace NSNAME
