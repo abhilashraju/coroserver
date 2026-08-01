@@ -19,6 +19,14 @@ console_server = executable('console_server',
   install_dir: get_option('bindir')
 )
 
+# Startup wrapper script — resolves remote-host last octet from
+# /run/openbmc/bmc_position at boot time, then exec's console_server.
+install_data(
+  'obmc-console-start.sh',
+  install_dir: get_option('bindir'),
+  install_mode: 'rwxr-xr-x'
+)
+
 # Console Client executable
 console_client = executable('console_client',
   'console_client.cpp',

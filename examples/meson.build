@@ -10,7 +10,7 @@
 # subdir('tcp_server')
 # subdir('messageque')
 # subdir('journalserver')
-#subdir('graphql_server')
+subdir('graphql_server')
 #subdir('uart_server')
 subdir('obmc_console')
 subdir('i2c_service')

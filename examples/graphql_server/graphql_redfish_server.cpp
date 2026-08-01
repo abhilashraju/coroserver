@@ -17,8 +17,8 @@ int main(int argc, const char* argv[])
     try
     {
         auto [cert, port, host, targetPort, user, password] = getArgs(
-            parseCommandline(argc, argv), "--cert,-c", "--port,-p",
-            "--host,-h", "--target-port,-t", "--user,-u", "--password,-w");
+            parseCommandline(argc, argv), "--cert,-c", "--port,-p", "--host,-h",
+            "--target-port,-t", "--user,-u", "--password,-w");
 
         boost::asio::io_context ioContext;
 
@@ -33,15 +33,17 @@ int main(int argc, const char* argv[])
         auto executor = std::make_shared<RedfishGraphQLExecutor>(
             buildRedfishTypedSchema(), provider);
 
-        boost::asio::ssl::context sslContext(
-            boost::asio::ssl::context::sslv23);
+        boost::asio::ssl::context sslContext(boost::asio::ssl::context::sslv23);
         sslContext.set_options(boost::asio::ssl::context::default_workarounds |
                                boost::asio::ssl::context::no_sslv2 |
                                boost::asio::ssl::context::single_dh_use);
 
-        std::string certDir = cert ? std::string(*cert) : ".";
-        sslContext.use_certificate_chain_file(certDir + "/server-cert.pem");
-        sslContext.use_private_key_file(certDir + "/server-key.pem",
+        std::string certFile = cert ? std::string(*cert) + "/server-cert.pem"
+                                    : "/etc/ssl/certs/https/server_cert.pem";
+        std::string keyFile = cert ? std::string(*cert) + "/server-key.pem"
+                                   : "/etc/ssl/private/server_pkey.pem";
+        sslContext.use_certificate_chain_file(certFile);
+        sslContext.use_private_key_file(keyFile,
                                         boost::asio::ssl::context::pem);
 
         HttpRouter router;
@@ -107,7 +109,8 @@ int main(int argc, const char* argv[])
             });
 
         int serverPort = port ? std::stoi(std::string(*port)) : 8444;
-        TcpStreamType acceptor(ioContext.get_executor(), serverPort, sslContext);
+        TcpStreamType acceptor(ioContext.get_executor(), serverPort,
+                               sslContext);
         HttpServer server(ioContext, acceptor, router);
 
         LOG_INFO("Redfish GraphQL Server started on port {}", serverPort);

@@ -1,4 +1,4 @@
-#include "graphql_parser_libgraphql.hpp"
+#include "graphql/parser.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -6,6 +6,7 @@
 #include <vector>
 
 using namespace NSNAME;
+using namespace NSNAME::graphql;
 
 namespace
 {
@@ -20,10 +21,10 @@ void expect(bool condition, const std::string& message)
 
 void testQueryWithVariables()
 {
-    ParsedOperation operation = LibGraphQLParser::parse(
+    Operation operation = Parser::parse(
         "query GetUser($userId: Int!) { user(id: $userId) { id name email age } }");
 
-    expect(operation.type == ParsedOperation::OperationType::Query,
+    expect(operation.type == Operation::Type::Query,
            "Expected query operation type");
     expect(operation.name == "GetUser", "Expected named query operation");
     expect(operation.variableDefinitions.size() == 1,
@@ -46,10 +47,10 @@ void testQueryWithVariables()
 
 void testMutationLiteralValues()
 {
-    ParsedOperation operation = LibGraphQLParser::parse(
+    Operation operation = Parser::parse(
         "mutation { createUser(name: \"Test User\", email: \"test@example.com\", age: 25) { id name email age } }");
 
-    expect(operation.type == ParsedOperation::OperationType::Mutation,
+    expect(operation.type == Operation::Type::Mutation,
            "Expected mutation operation type");
     expect(operation.selections.size() == 1,
            "Expected one mutation selection");
@@ -63,7 +64,7 @@ void testMutationLiteralValues()
 
 void testNestedObjectAndListValues()
 {
-    ParsedOperation operation = LibGraphQLParser::parse(
+    Operation operation = Parser::parse(
         "query($input: Input = {enabled: true, ids: [1, 2, 3]}) { users { id } }");
 
     expect(operation.variableDefinitions.size() == 1,
@@ -80,7 +81,7 @@ void testNestedObjectAndListValues()
 
 void testDirectiveAndFragmentTolerance()
 {
-    ParsedOperation operation = LibGraphQLParser::parse(
+    Operation operation = Parser::parse(
         "query GetUsers @skip(if: false) { users @include(if: true) { id name ... on User { email } } } fragment UserFields on User { id }"
     );
 
@@ -98,7 +99,7 @@ void testDirectiveAndFragmentTolerance()
 void testInvalidSyntax()
 {
     std::string error;
-    expect(!LibGraphQLParser::validate("query { users { id name }", error),
+    expect(!Parser::validate("query { users { id name }", error),
            "Expected invalid query to fail validation");
     expect(!error.empty(), "Expected validation error message");
 }

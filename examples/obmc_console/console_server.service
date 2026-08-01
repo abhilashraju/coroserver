@@ -8,7 +8,10 @@ Wants=dev-ttyS0.device
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/console_server /etc/obmc-console-multi.conf default
+# Wrapper script reads /run/openbmc/bmc_position (0 or 1) to set the last
+# octet of remote-host, writes the resolved config to /run/obmc-console/, then
+# exec's console_server.  Falls back to octet 0 if the file is absent.
+ExecStart=/usr/bin/obmc-console-start.sh
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -19,7 +22,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/tmp /var/log /run
+ReadWritePaths=/tmp /var/log /run /run/obmc-console
 
 # Resource limits
 LimitNOFILE=65536
