@@ -310,6 +310,8 @@ class Parser
     class Impl
     {
       public:
+        static constexpr std::size_t kMaxDepth = 20;
+
         explicit Impl(std::string_view query) : tokenizer(query)
         {
             advance();
@@ -317,19 +319,11 @@ class Parser
 
         Operation parseDocument()
         {
-            if (current.type == TokenType::Spread)
-            {
-                parseFragmentDefinition();
-                if (current.type != TokenType::End)
-                {
-                    throwError("Only one operation is supported per document");
-                }
-            }
-
             Operation operation = parseOperationDefinition();
-            while (current.type == TokenType::Spread)
+            while (current.type == TokenType::Name && current.text == "fragment")
             {
-                parseFragmentDefinition();
+                FragmentDefinition frag = parseFragmentDefinition();
+                operation.fragments[frag.name] = std::move(frag);
             }
             if (current.type != TokenType::End)
             {
@@ -420,24 +414,34 @@ class Parser
                    "Expected ')' after variable definitions");
         }
 
-        std::vector<FieldSelection> parseSelectionSet()
+        std::vector<FieldSelection> parseSelectionSet(
+            std::size_t depth = 0)
         {
+            if (depth >= kMaxDepth)
+            {
+                throwError("Query exceeds maximum nesting depth of " +
+                           std::to_string(kMaxDepth));
+            }
             expect(TokenType::LeftBrace, "Expected '{' to start selection set");
             std::vector<FieldSelection> fields;
             while (current.type != TokenType::RightBrace)
             {
                 if (current.type == TokenType::Spread)
                 {
-                    parseFragmentSpread();
+                    auto spread = parseFragmentSpread(depth);
+                    for (auto& f : spread)
+                    {
+                        fields.push_back(std::move(f));
+                    }
                     continue;
                 }
-                fields.push_back(parseField());
+                fields.push_back(parseField(depth));
             }
             expect(TokenType::RightBrace, "Expected '}' to end selection set");
             return fields;
         }
 
-        FieldSelection parseField()
+        FieldSelection parseField(std::size_t depth)
         {
             FieldSelection field;
             std::string fieldName =
@@ -464,7 +468,7 @@ class Parser
 
             if (current.type == TokenType::LeftBrace)
             {
-                field.selections = parseSelectionSet();
+                field.selections = parseSelectionSet(depth + 1);
             }
 
             return field;
@@ -638,49 +642,63 @@ class Parser
             return {Value::Kind::Object, result};
         }
 
-        void parseFragmentDefinition()
+        // Parses a top-level "fragment Foo on Type { ... }" definition.
+        FragmentDefinition parseFragmentDefinition()
         {
-            expect(TokenType::Spread, "Expected fragment definition");
-            if (isName("on"))
-            {
-                parseInlineFragment();
-                return;
-            }
-
-            expect(TokenType::Name, "Expected fragment name");
+            expect(TokenType::Name, "Expected 'fragment' keyword");
+            FragmentDefinition frag;
+            frag.name =
+                expect(TokenType::Name, "Expected fragment name").text;
             if (!isName("on"))
             {
                 throwError("Expected 'on' in fragment definition");
             }
-            advance();
-            expect(TokenType::Name,
-                   "Expected type condition in fragment definition");
-            parseDirectives();
-            parseSelectionSet();
+            advance(); // consume "on"
+            frag.typeCondition =
+                expect(TokenType::Name,
+                       "Expected type condition in fragment definition")
+                    .text;
+            frag.directives = parseDirectives();
+            // Fragment bodies are parsed at depth 0; their actual depth is
+            // enforced when they are expanded at the call-site (expandFragments).
+            frag.selections = parseSelectionSet(0);
+            return frag;
         }
 
-        void parseFragmentSpread()
+        // Parses a "...FragmentName" or "... on Type { }" spread inside a
+        // selection set.  Returns the resulting FieldSelection entries so the
+        // caller can merge them directly into the parent selection set.
+        std::vector<FieldSelection> parseFragmentSpread(std::size_t depth)
         {
-            expect(TokenType::Spread, "Expected fragment spread");
+            expect(TokenType::Spread, "Expected '...'");
             if (isName("on"))
             {
-                parseInlineFragment();
-                return;
+                // Inline fragment — expand its selections immediately.
+                return parseInlineFragment(depth);
             }
-            expect(TokenType::Name, "Expected fragment name after '...'");
-            parseDirectives();
+            // Named fragment spread — record the name; expansion happens
+            // after the full document is parsed (in expandFragments).
+            FieldSelection placeholder;
+            placeholder.fragmentSpreadName =
+                expect(TokenType::Name,
+                       "Expected fragment name after '...'")
+                    .text;
+            parseDirectives(); // consume any directives (stored in placeholder if needed)
+            return {std::move(placeholder)};
         }
 
-        void parseInlineFragment()
+        // Parses "... on Type { }" or "... { }" and returns its selections.
+        std::vector<FieldSelection> parseInlineFragment(std::size_t depth)
         {
             if (isName("on"))
             {
-                advance();
+                advance(); // consume "on"
                 expect(TokenType::Name,
                        "Expected inline fragment type condition");
+                // type condition is noted but not enforced by this executor
             }
             parseDirectives();
-            parseSelectionSet();
+            return parseSelectionSet(depth);
         }
 
         void skipTypeReference(VariableDefinition& definition)

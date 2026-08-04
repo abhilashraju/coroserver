@@ -43,6 +43,7 @@ class TypedExecutor
             }
 
             Operation operation = Parser::parse(query);
+            expandFragments(operation);
             schema.validateOperation(operation);
 
             nlohmann::json mergedVariables = initialVariables(operation);
@@ -82,6 +83,7 @@ class TypedExecutor
         }
 
         Operation operation = Parser::parse(query);
+        expandFragments(operation);
         schema.validateOperation(operation);
 
         nlohmann::json mergedVariables = initialVariables(operation);

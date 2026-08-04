@@ -7,11 +7,39 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
 using namespace NSNAME;
+
+namespace
+{
+
+constexpr int kIntervalMinSecs = 5;
+constexpr int kIntervalMaxSecs = 300;
+constexpr int kIntervalDefaultSecs = 5;
+
+std::optional<int> parseInterval(const std::string& intervalStr)
+{
+    if (intervalStr.empty())
+    {
+        return kIntervalDefaultSecs;
+    }
+    try
+    {
+        int value = std::stoi(intervalStr);
+        return std::clamp(value, kIntervalMinSecs, kIntervalMaxSecs);
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+}
+
+} // namespace
 
 int main(int argc, const char* argv[])
 {
@@ -76,21 +104,16 @@ int main(int argc, const char* argv[])
             "/graphql",
             [executor](Request& req, const http_function& params)
                 -> net::awaitable<Response> {
-                nlohmann::json requestBody;
+                nlohmann::json requestBody =
+                    nlohmann::json::parse(req.body(), nullptr, false);
 
-                try
-                {
-                    requestBody =
-                        nlohmann::json::parse(req.body(), nullptr, false);
-                }
-                catch (const nlohmann::json::parse_error&)
+                if (requestBody.is_discarded())
                 {
                     co_return make_bad_request_error(
                         "Invalid JSON in request body", req.version());
                 }
 
-                if (requestBody.is_discarded() ||
-                    !requestBody.contains("query"))
+                if (!requestBody.contains("query"))
                 {
                     co_return make_bad_request_error(
                         "Missing 'query' field in request", req.version());
@@ -157,9 +180,17 @@ int main(int argc, const char* argv[])
                     co_return;
                 }
 
-                int intervalSecs =
-                    intervalStr.empty() ? 5 : std::stoi(intervalStr);
-                auto interval = std::chrono::seconds(intervalSecs);
+                auto maybeInterval = parseInterval(intervalStr);
+                if (!maybeInterval)
+                {
+                    nlohmann::json err = {
+                        {"errors",
+                         {{{"message",
+                            "Invalid 'interval' parameter: must be an integer"}}}}};
+                    co_await writer.write(err.dump());
+                    co_return;
+                }
+                auto interval = std::chrono::seconds(*maybeInterval);
 
                 co_await executor->executeSubscription(
                     query, nlohmann::json::object(), interval,

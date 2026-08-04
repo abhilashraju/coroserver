@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace NSNAME::graphql
@@ -46,7 +47,16 @@ struct FieldSelection
 {
     std::string name;
     std::string alias;
+    std::string fragmentSpreadName; // non-empty when this is a "...FragmentName" spread
     std::vector<Argument> arguments;
+    std::vector<Directive> directives;
+    std::vector<FieldSelection> selections;
+};
+
+struct FragmentDefinition
+{
+    std::string name;
+    std::string typeCondition;
     std::vector<Directive> directives;
     std::vector<FieldSelection> selections;
 };
@@ -74,6 +84,7 @@ struct Operation
     std::vector<VariableDefinition> variableDefinitions;
     std::vector<Directive> directives;
     std::vector<FieldSelection> selections;
+    std::unordered_map<std::string, FragmentDefinition> fragments;
 };
 
 } // namespace NSNAME::graphql

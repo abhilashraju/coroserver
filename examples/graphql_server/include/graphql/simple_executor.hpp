@@ -38,6 +38,7 @@ class SimpleExecutor
             }
 
             Operation operation = Parser::parse(query);
+            expandFragments(operation);
             nlohmann::json mergedVariables = initialVariables(operation);
             for (auto it = variables.begin(); it != variables.end(); ++it)
             {

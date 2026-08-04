@@ -296,6 +296,152 @@ curl -k -X POST https://localhost:8444/graphql \
   }'
 ```
 
+### Fragments — reusable field sets
+
+Fragments let you define a named set of fields once and reuse it in multiple
+places.  They are especially useful when the same type appears at several points
+in a query (e.g. `Status` on both a system and its chassis).
+
+#### Named fragment — shared status fields
+
+Define a `StatusFields` fragment and spread it into two different root queries in
+one request:
+
+```bash
+curl -k -X POST https://localhost:8444/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "query HealthOverview {
+      systems {
+        id
+        name
+        powerState
+        status { ...StatusFields }
+      }
+      chassis {
+        id
+        name
+        status { ...StatusFields }
+      }
+    }
+    fragment StatusFields on Status {
+      health
+      state
+    }"
+  }'
+```
+
+Expected response shape:
+
+```json
+{
+  "data": {
+    "systems": [
+      {
+        "id": "1",
+        "name": "Managed System",
+        "powerState": "On",
+        "status": { "health": "OK", "state": "Enabled" }
+      }
+    ],
+    "chassis": [
+      {
+        "id": "1",
+        "name": "Rack Chassis",
+        "status": { "health": "OK", "state": "Enabled" }
+      }
+    ]
+  }
+}
+```
+
+#### Named fragment — processor summary details
+
+Reuse processor fields across a single-system query and a full system list:
+
+```bash
+curl -k -X POST https://localhost:8444/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "query ProcessorOverview {
+      primary: system(id: \"1\") {
+        id
+        name
+        ...ProcessorFields
+      }
+      allSystems: systems {
+        id
+        ...ProcessorFields
+      }
+    }
+    fragment ProcessorFields on ComputerSystem {
+      powerState
+      processorSummary { count model }
+      status { health state }
+    }"
+  }'
+```
+
+#### Inline fragment — type-local fields without a name
+
+Inline fragments (`... on Type { }`) are useful when you want to select
+type-specific fields in a single shot without defining a separate fragment:
+
+```bash
+curl -k -X POST https://localhost:8444/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "{ systems {
+        id
+        name
+        ... on ComputerSystem {
+          powerState
+          processorSummary { count model }
+        }
+        status { health state }
+      }
+    }"
+  }'
+```
+
+#### Combining named fragments, inline fragments, and aliases
+
+```bash
+curl -k -X POST https://localhost:8444/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "query FullInventory {
+      bmc: managers {
+        id
+        name
+        ...ManagerHealth
+      }
+      allChassis: chassis {
+        id
+        name
+        ... on Chassis { status { health state } }
+      }
+      ethernetInterfaces {
+        id
+        macAddress
+        linkStatus
+        ...NetworkAddresses
+      }
+    }
+    fragment ManagerHealth on Manager {
+      status { health state }
+    }
+    fragment NetworkAddresses on EthernetInterface {
+      ipv4Addresses { address subnetMask gateway }
+      ipv6Addresses { address prefixLength addressState }
+    }"
+  }'
+```
+
+> **Note — fragment placement:** Fragment definitions must appear **after** the
+> operation body in the document, as shown above.  The server parses the
+> operation first, then reads any `fragment` definitions that follow.
+
 ---
 
 ## Redfish Example — Subscriptions (SSE)

@@ -4,6 +4,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace NSNAME::graphql
@@ -67,6 +70,64 @@ inline nlohmann::json initialVariables(const Operation& operation)
                                       : nlohmann::json(nullptr);
     }
     return result;
+}
+
+// Recursively expand named fragment spreads (placeholder FieldSelections whose
+// fragmentSpreadName is non-empty) into the actual fields from the fragment
+// registry.  Inline fragments are already expanded by the parser.
+// `visited` guards against circular fragment references.
+inline void expandFragments(
+    std::vector<FieldSelection>& selections,
+    const std::unordered_map<std::string, FragmentDefinition>& fragments,
+    std::unordered_set<std::string>& visited)
+{
+    std::vector<FieldSelection> expanded;
+    expanded.reserve(selections.size());
+
+    for (auto& sel : selections)
+    {
+        if (!sel.fragmentSpreadName.empty())
+        {
+            // This is a "...FragmentName" placeholder — replace with the
+            // fragment's fields.
+            const std::string& fragName = sel.fragmentSpreadName;
+            if (visited.count(fragName) != 0)
+            {
+                throw std::runtime_error("Circular fragment reference: " +
+                                         fragName);
+            }
+            auto it = fragments.find(fragName);
+            if (it == fragments.end())
+            {
+                throw std::runtime_error("Unknown fragment: " + fragName);
+            }
+            // Work on a copy so the stored definition stays pristine.
+            auto fragFields = it->second.selections;
+            visited.insert(fragName);
+            expandFragments(fragFields, fragments, visited);
+            visited.erase(fragName);
+            for (auto& f : fragFields)
+            {
+                expanded.push_back(std::move(f));
+            }
+        }
+        else
+        {
+            // Ordinary field — recurse into its own sub-selections.
+            expandFragments(sel.selections, fragments, visited);
+            expanded.push_back(std::move(sel));
+        }
+    }
+
+    selections = std::move(expanded);
+}
+
+// Convenience overload — no external visited set needed.
+inline void expandFragments(
+    Operation& operation)
+{
+    std::unordered_set<std::string> visited;
+    expandFragments(operation.selections, operation.fragments, visited);
 }
 
 inline nlohmann::json filterFields(
