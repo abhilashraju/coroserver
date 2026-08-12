@@ -1,0 +1,14 @@
+[Unit]
+Description=GraphQL Redfish → DBus Satellite Bridge
+Documentation=https://github.com/openbmc/coroserver
+After=network.target dbus.service
+Wants=dbus.service
+
+[Service]
+ExecStart=/usr/bin/graphql_dbus_client -c /etc/graphql_dbus_client/satellite_queries.json
+Type=simple
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

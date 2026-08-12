@@ -1,0 +1,52 @@
+{
+  "host": "localhost",
+  "port": "18080",
+  "subscriptions": [
+    {
+      "name": "SystemStatus",
+      "dbus_path": "/xyz/openbmc_project/Satellite/Systems/1",
+      "dbus_interface": "xyz.openbmc_project.Satellite.ComputerSystem",
+      "query": "subscription { systemStatus(id:\"system\") { id name powerState status { health state } processorSummary { count model } } }",
+      "interval_seconds": 10,
+      "field_map": {
+        "id":                    "Id",
+        "name":                  "Name",
+        "powerState":            "PowerState",
+        "status.health":         "StatusHealth",
+        "status.state":          "StatusState",
+        "processorSummary.count":"ProcessorCount",
+        "processorSummary.model":"ProcessorModel"
+      }
+    },
+    {
+      "name": "ChassisStatus",
+      "dbus_path": "/xyz/openbmc_project/Satellite/Chassis/1",
+      "dbus_interface": "xyz.openbmc_project.Satellite.Chassis",
+      "query": "subscription { chassisStatus(id:\"chassis1\") { id name status { health state } } }",
+      "interval_seconds": 10,
+      "field_map": {
+        "id":            "Id",
+        "name":          "Name",
+        "status.health": "StatusHealth",
+        "status.state":  "StatusState"
+      }
+    },
+    {
+      "name": "EthernetInterfaces",
+      "dbus_path": "/xyz/openbmc_project/Satellite/Network/Interfaces",
+      "dbus_interface": "xyz.openbmc_project.Satellite.EthernetInterface",
+      "query": "subscription { ethernetInterfaceUpdates { id name macAddress speedMbps linkStatus status { health state } } }",
+      "list": true,
+      "interval_seconds": 30,
+      "field_map": {
+        "id":            "Id",
+        "name":          "Name",
+        "macAddress":    "MACAddress",
+        "speedMbps":     "SpeedMbps",
+        "linkStatus":    "LinkStatus",
+        "status.health": "StatusHealth",
+        "status.state":  "StatusState"
+      }
+    }
+  ]
+}
