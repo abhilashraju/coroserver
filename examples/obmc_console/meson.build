@@ -36,6 +36,16 @@ console_client = executable('console_client',
   install_dir: get_option('bindir')
 )
 
+# IBMi 5250 Console Client — decodes VSLIP frames and renders 5250 data
+# from the VUART0 channel exposed by console_server.
+ibmi_console_client = executable('ibmi_console_client',
+  'ibmi_console_client.cpp',
+  include_directories: reactor_inc,
+  dependencies: [reactor_dep],
+  install: true,
+  install_dir: get_option('bindir')
+)
+
 # Install systemd service file
 systemd = dependency('systemd', required: false)
 if systemd.found()
