@@ -5,8 +5,65 @@
 #include <nlohmann/json.hpp>
 
 #include <map>
+#include <optional>
 namespace NSNAME
 {
+
+// ---------------------------------------------------------------------------
+// SSE streaming types
+// ---------------------------------------------------------------------------
+
+/// One SSE frame delivered by executeAsStream().
+/// ec is set on transport error or EOF; data holds the raw frame text.
+struct SseFrame
+{
+    boost::system::error_code ec;
+    std::string data;
+};
+
+/// Lightweight single-producer / single-consumer mailbox built on
+/// steady_timer — same wakeup pattern used by task_barrier in when_all.hpp.
+/// No new dependencies: only net::steady_timer (already used everywhere).
+struct SseStream
+{
+    explicit SseStream(net::any_io_executor exec) : timer_(exec)
+    {
+        // Arm to max so the first next() call suspends immediately.
+        timer_.expires_at(net::steady_timer::time_point::max());
+    }
+
+    // Called by frameProducer — deposits one frame and wakes the consumer.
+    void post(SseFrame frame)
+    {
+        slot_ = std::move(frame);
+        timer_.cancel(); // wakes whoever is co_await-ing next()
+    }
+
+    // Called by the caller's while loop — suspends until post() fires.
+    net::awaitable<SseFrame> next()
+    {
+        boost::system::error_code ec;
+        co_await timer_.async_wait(
+            net::redirect_error(net::use_awaitable, ec));
+        // ec == operation_aborted means timer_.cancel() was called by post().
+        // Re-arm for the next frame.
+        timer_.expires_at(net::steady_timer::time_point::max());
+        if (!slot_)
+        {
+            // Timer cancelled for a reason other than post() (e.g. io_context
+            // shutdown) — return an EOF frame so the consumer exits cleanly.
+            co_return SseFrame{boost::asio::error::eof, {}};
+        }
+        SseFrame frame = std::move(*slot_);
+        slot_.reset();
+        co_return frame;
+    }
+
+  private:
+    net::steady_timer timer_;
+    std::optional<SseFrame> slot_;
+};
+
 template <typename T>
 concept WebClientThenFunction =
     requires(T t, Response response) {
@@ -45,6 +102,7 @@ struct WebClient
         int version{11};
         std::map<std::string, std::string> headers;
         bool keepAlive{true};
+        std::string frameDelimiter{"\n\n"}; // used by executeAsStream()
     } request;
     std::function<AwaitableResult<boost::system::error_code>(Response)>
         thenHandler;
@@ -122,6 +180,16 @@ struct WebClient
     WebClient& withTarget(const std::string& t)
     {
         request.target = t;
+        return *this;
+    }
+    WebClient& withParams(std::map<std::string, std::string> p)
+    {
+        request.params = std::move(p);
+        return *this;
+    }
+    WebClient& withFrameDelimiter(std::string delim)
+    {
+        request.frameDelimiter = std::move(delim);
         return *this;
     }
     WebClient& withHeaders(std::map<std::string, std::string> h)
@@ -229,23 +297,17 @@ struct WebClient
             co_return co_await thenHandler(std::move(response));
         }
     }
-    template <typename... Ret>
-    AwaitableResult<boost::system::error_code, Ret...> execute()
+    // Build the Beast Request from the current WebRequest state.
+    // Extracted so both execute() and executeAsStream() share the same logic.
+    Request buildRequest() const
     {
-        auto [ec] = co_await tryConnect();
-        if (ec)
-        {
-            co_return co_await returnFailed<boost::system::error_code, Ret...>(
-                ec);
-        }
         std::string params;
+        bool first = true;
         for (const auto& [key, value] : request.params)
         {
-            params += key + "=" + value + "&";
-        }
-        if (!params.empty())
-        {
-            params = "?" + params;
+            params += (first ? "?" : "&");
+            params += key + "=" + value;
+            first = false;
         }
         Request req(request.method, request.target + params, request.version);
         req.keep_alive(request.keepAlive);
@@ -257,14 +319,25 @@ struct WebClient
         {
             req.set(http::field::host, "localhost");
         }
-
         for (const auto& [key, value] : request.headers)
         {
             req.set(key, value);
         }
         req.body() = request.body;
         req.prepare_payload();
+        return req;
+    }
 
+    template <typename... Ret>
+    AwaitableResult<boost::system::error_code, Ret...> execute()
+    {
+        auto [ec] = co_await tryConnect();
+        if (ec)
+        {
+            co_return co_await returnFailed<boost::system::error_code, Ret...>(
+                ec);
+        }
+        Request req = buildRequest();
         ec = co_await client.send_request(req);
         if (ec)
         {
@@ -278,6 +351,56 @@ struct WebClient
                 ec1, std::move(response));
         }
         co_return co_await returnFailed<boost::system::error_code, Ret...>(ec1);
+    }
+
+    // Open a persistent SSE connection and return a shared SseStream.
+    // The caller co_await's stream->next() in a loop to receive frames.
+    // The producer coroutine is spawned detached; it exits when the socket
+    // closes or the SseStream is destroyed (timer cancelled on destruction).
+    net::awaitable<
+        std::pair<boost::system::error_code, std::shared_ptr<SseStream>>>
+        executeAsStream()
+    {
+        // 1. Connect
+        auto [ec] = co_await tryConnect();
+        if (ec)
+            co_return std::make_pair(ec, nullptr);
+
+        // 2. Build and send request with SSE headers
+        Request req = buildRequest();
+        req.set(http::field::accept, "text/event-stream");
+        req.set(http::field::cache_control, "no-cache");
+        req.keep_alive(true);
+
+        ec = co_await client.send_request(req);
+        if (ec)
+            co_return std::make_pair(ec, nullptr);
+
+        // 3. Read and parse the HTTP response header properly via Beast.
+        auto [hec, statusCode] = co_await client.readResponseHeader();
+        if (hec)
+            co_return std::make_pair(hec, nullptr);
+
+        // 4. Check HTTP status — abort cleanly on anything other than 2xx.
+        LOG_INFO("SSE response status: {}", statusCode);
+        if (statusCode < 200 || statusCode >= 300)
+        {
+            LOG_ERROR("SSE request rejected: HTTP {}", statusCode);
+            co_return std::make_pair(
+                make_error_code(boost::system::errc::connection_refused),
+                nullptr);
+        }
+
+        // 5. Create the mailbox and spawn the frame producer
+        auto stream = std::make_shared<SseStream>(
+            co_await net::this_coro::executor);
+        std::string delim = request.frameDelimiter;
+
+        net::co_spawn(co_await net::this_coro::executor,
+                      frameProducer(stream, std::move(delim)),
+                      net::detached);
+
+        co_return std::make_pair(boost::system::error_code{}, stream);
     }
     template <typename RetType>
     AwaitableResult<boost::system::error_code, RetType> executeAndReturnAs()
@@ -325,5 +448,33 @@ struct WebClient
         orElseHandler = std::move(handler);
         return *this;
     };
+
+  private:
+    // Infinite read loop — runs as a detached coroutine.
+    // Reads one frame per iteration and posts it to the SseStream mailbox.
+    // Exits on EOF (clean server close) or any transport error, posting an
+    // SseFrame with ec set so the consumer can detect termination.
+    net::awaitable<void> frameProducer(std::shared_ptr<SseStream> stream,
+                                       std::string delim)
+    {
+        while (true)
+        {
+            auto [rec, frame] = co_await client.readUntil(delim);
+
+            if (rec == net::error::eof)
+            {
+                // Clean server close — notify consumer then stop.
+                stream->post(SseFrame{rec, {}});
+                co_return;
+            }
+            if (rec)
+            {
+                // Transport error — notify consumer then stop.
+                stream->post(SseFrame{rec, {}});
+                co_return;
+            }
+            stream->post(SseFrame{{}, std::move(frame)});
+        }
+    }
 };
 }

@@ -8,8 +8,11 @@
 #include <boost/beast.hpp>
 #include <boost/system/error_code.hpp>
 
+#include <cstring>
 #include <iostream>
 #include <string>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <utility>
 
 namespace NSNAME
@@ -110,8 +113,42 @@ class UnixClientPlain
     net::awaitable<boost::system::error_code> connect(const std::string& path)
     {
         boost::system::error_code ec;
-        unix_domain::endpoint endpoint(path);
 
+        // Abstract Unix socket: name does not start with '/'.
+        // Boost.Asio's endpoint constructor treats the string as a filesystem
+        // path, so we must connect via the native fd for the abstract namespace.
+        if (!path.empty() && path[0] != '/')
+        {
+            stream_->open(unix_domain(), ec);
+            if (ec)
+            {
+                LOG_ERROR("Error opening socket for {}. Error: {}", path,
+                          ec.message());
+                co_return ec;
+            }
+
+            struct sockaddr_un addr;
+            std::memset(&addr, 0, sizeof(addr));
+            addr.sun_family = AF_UNIX;
+            // sun_path[0] stays '\0' — abstract namespace marker
+            std::memcpy(addr.sun_path + 1, path.c_str(), path.size());
+            socklen_t addrlen =
+                static_cast<socklen_t>(sizeof(sa_family_t) + 1 + path.size());
+
+            if (::connect(stream_->native_handle(),
+                          reinterpret_cast<struct sockaddr*>(&addr),
+                          addrlen) < 0)
+            {
+                ec = boost::system::error_code(
+                    errno, boost::asio::error::get_system_category());
+                LOG_ERROR("Error connecting to {}. Error: {}", path,
+                          ec.message());
+            }
+            co_return ec;
+        }
+
+        // Filesystem socket — use Boost.Asio normally
+        unix_domain::endpoint endpoint(path);
         TimedStreamer streamer(stream_, timer_);
         streamer.setTimeout(30s);
         co_await stream_->async_connect(

@@ -310,10 +310,12 @@ struct TimedStreamer
         {
             co_return std::make_pair(ec, std::string{});
         }
-        std::string ret;
-        auto data = buffer.data();
-        ret.append(boost::asio::buffers_begin(data),
-                   boost::asio::buffers_begin(data) + size);
+        // Use sgetn to read exactly `size` bytes from the streambuf get area.
+        // This is correct for multi-buffer sequences — unlike buffers_begin()+size
+        // which only covers the first buffer and trips an iterator bounds assertion
+        // when async_read_until reads ahead into a second internal buffer.
+        std::string ret(size, '\0');
+        buffer.sgetn(ret.data(), static_cast<std::streamsize>(size));
         co_return std::make_pair(ec, std::move(ret));
 
         // std::string ret;

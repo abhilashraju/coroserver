@@ -113,6 +113,8 @@ inline http_function parse_function(std::string_view target)
         for (auto& p : params)
         {
             auto pairs = split(p, '=');
+            if (pairs.size() < 2 || pairs[0].empty())
+                continue; // skip empty tokens (e.g. trailing '&') or bare keys
             parampairs.emplace_back(pairs[0], url_decode(pairs[1]));
         }
         return http_function{to_string(func), std::move(parampairs)};
