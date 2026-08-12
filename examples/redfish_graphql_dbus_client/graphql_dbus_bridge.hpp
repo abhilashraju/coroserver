@@ -93,9 +93,11 @@ inline std::expected<BridgeConfig, std::string>
 }
 
 // ---------------------------------------------------------------------------
-// jsonAtPath — resolve a dot-separated key path inside a JSON object.
-//   "status.health" → json["status"]["health"]
-// Returns std::nullopt when any segment is missing.
+// jsonAtPath — resolve a dot-separated key path inside a JSON value.
+//   "status.health"          → json["status"]["health"]   (object traversal)
+//   "ipv4Addresses.0.address"→ json["ipv4Addresses"][0]["address"]
+//                              (numeric segment = array index)
+// Returns std::nullopt when any segment is missing or out of range.
 // ---------------------------------------------------------------------------
 
 inline std::optional<std::reference_wrapper<const nlohmann::json>>
@@ -103,26 +105,49 @@ inline std::optional<std::reference_wrapper<const nlohmann::json>>
 {
     const nlohmann::json* cur = &root;
     std::string seg;
+
+    auto step = [&]() -> bool {
+        if (cur->is_array())
+        {
+            // Numeric segment → array index
+            bool isNum = !seg.empty() &&
+                         std::all_of(seg.begin(), seg.end(), ::isdigit);
+            if (!isNum)
+                return false;
+            std::size_t idx = static_cast<std::size_t>(std::stoul(seg));
+            if (idx >= cur->size())
+                return false;
+            cur = &(*cur)[idx];
+        }
+        else if (cur->is_object())
+        {
+            if (!cur->contains(seg))
+                return false;
+            cur = &(*cur)[seg];
+        }
+        else
+        {
+            return false;
+        }
+        seg.clear();
+        return true;
+    };
+
     for (char c : dotPath)
     {
         if (c == '.')
         {
-            if (!cur->is_object() || !cur->contains(seg))
+            if (!step())
                 return std::nullopt;
-            cur = &(*cur)[seg];
-            seg.clear();
         }
         else
         {
             seg += c;
         }
     }
-    if (!seg.empty())
-    {
-        if (!cur->is_object() || !cur->contains(seg))
-            return std::nullopt;
-        cur = &(*cur)[seg];
-    }
+    if (!seg.empty() && !step())
+        return std::nullopt;
+
     return std::cref(*cur);
 }
 

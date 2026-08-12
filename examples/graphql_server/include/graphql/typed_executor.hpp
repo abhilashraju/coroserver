@@ -22,8 +22,7 @@ class TypedExecutor
 {
   public:
     TypedExecutor(TypedSchema schema, std::shared_ptr<Provider> provider) :
-        schema(std::move(schema)),
-        provider(std::move(provider))
+        schema(std::move(schema)), provider(std::move(provider))
     {}
 
     boost::asio::awaitable<nlohmann::json> execute(
@@ -52,8 +51,8 @@ class TypedExecutor
                 mergedVariables[it.key()] = it.value();
             }
 
-            response["data"] =
-                co_await executeSelections(operation.selections, mergedVariables);
+            response["data"] = co_await executeSelections(operation.selections,
+                                                          mergedVariables);
         }
         catch (const std::exception& e)
         {
@@ -150,8 +149,8 @@ class TypedExecutor
                 schema.getRootSubscriptionField(selection.name);
             if (fieldSpec == nullptr)
             {
-                throw std::runtime_error("Unknown subscription field: " +
-                                         selection.name);
+                throw std::runtime_error(
+                    "Unknown subscription field: " + selection.name);
             }
 
             std::string outputName =
@@ -169,10 +168,12 @@ class TypedExecutor
         nlohmann::json result = nlohmann::json::object();
         for (const FieldSelection& selection : selections)
         {
-            const FieldSpec* fieldSpec = schema.getRootQueryField(selection.name);
+            const FieldSpec* fieldSpec =
+                schema.getRootQueryField(selection.name);
             if (fieldSpec == nullptr)
             {
-                throw std::runtime_error("Unknown query field: " + selection.name);
+                throw std::runtime_error(
+                    "Unknown query field: " + selection.name);
             }
 
             std::string outputName =
@@ -202,15 +203,15 @@ class TypedExecutor
         {
             if (!value.is_array())
             {
-                throw std::runtime_error("Expected array for field '" +
-                                         selection.name + "'");
+                throw std::runtime_error(
+                    "Expected array for field '" + selection.name + "'");
             }
 
             nlohmann::json result = nlohmann::json::array();
             for (const auto& item : value)
             {
-                result.push_back(co_await projectObject(item, fieldSpec.returnType,
-                                                        selection.selections));
+                result.push_back(co_await projectObject(
+                    item, fieldSpec.returnType, selection.selections));
             }
             co_return result;
         }
@@ -257,6 +258,83 @@ class TypedExecutor
                                     const nlohmann::json& variables) const
     {
         return argumentsToJson(selection.arguments, variables);
+    }
+
+    // Expand a redfishPath template by substituting {argName} placeholders
+    // with the resolved argument values from `args`.
+    // Example: expandPath("/redfish/v1/Systems/{id}", {{"id","bmc0"}})
+    //          → "/redfish/v1/Systems/bmc0"
+    static std::string expandPath(const std::string& pathTemplate,
+                                  const nlohmann::json& args)
+    {
+        std::string result = pathTemplate;
+        for (auto it = args.begin(); it != args.end(); ++it)
+        {
+            const std::string placeholder = "{" + it.key() + "}";
+            const std::string value = it.value().get<std::string>();
+            std::string::size_type pos = 0;
+            while ((pos = result.find(placeholder, pos)) != std::string::npos)
+            {
+                result.replace(pos, placeholder.size(), value);
+                pos += value.size();
+            }
+        }
+        return result;
+    }
+
+    // Generic resolution driven by FieldSpec::redfishPath.
+    // Subclasses can call this when the field has a redfishPath set, or
+    // override resolveRootField entirely and handle only their custom cases.
+    boost::asio::awaitable<nlohmann::json> resolveByPath(
+        const FieldSelection& selection, const FieldSpec& fieldSpec,
+        const nlohmann::json& variables, bool fresh = false)
+    {
+        if (fieldSpec.redfishPath.empty())
+        {
+            throw std::runtime_error(
+                "No redfishPath defined for field: " + fieldSpec.name);
+        }
+
+        nlohmann::json args = resolveArguments(selection, variables);
+        const std::string target = expandPath(fieldSpec.redfishPath, args);
+
+        nlohmann::json payload = fresh ? co_await provider->getFresh(target)
+                                       : co_await provider->get(target);
+
+        if (fieldSpec.isList)
+        {
+            if (!payload.contains("Members") || !payload["Members"].is_array())
+            {
+                throw std::runtime_error(
+                    "Expected collection Members array for '" + fieldSpec.name +
+                    "'");
+            }
+
+            nlohmann::json result = nlohmann::json::array();
+            for (const auto& member : payload["Members"])
+            {
+                if (!member.contains("@odata.id"))
+                {
+                    continue;
+                }
+                nlohmann::json item =
+                    fresh ? co_await provider->getFresh(
+                                member["@odata.id"].get<std::string>())
+                          : co_await provider->get(
+                                member["@odata.id"].get<std::string>());
+                result.push_back(co_await projectObject(
+                    item, fieldSpec.returnType, selection.selections));
+            }
+            co_return result;
+        }
+
+        if (fieldSpec.scalar)
+        {
+            co_return payload;
+        }
+
+        co_return co_await projectObject(payload, fieldSpec.returnType,
+                                         selection.selections);
     }
 
     TypedSchema schema;

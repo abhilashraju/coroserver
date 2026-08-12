@@ -3,6 +3,9 @@
 #include "graphql/ast.hpp"
 #include "name_space.hpp"
 
+#include <nlohmann/json.hpp>
+
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -26,6 +29,11 @@ struct FieldSpec
     bool isList = false;
     bool scalar = false;
     std::vector<ArgumentSpec> arguments;
+    // Redfish URL template for root queries/subscriptions.
+    // Use {argName} placeholders that are substituted from query arguments.
+    // Example: "/redfish/v1/Systems/{id}"
+    // Leave empty for object fields (non-root).
+    std::string redfishPath;
 };
 
 struct ObjectSpec
@@ -37,6 +45,86 @@ struct ObjectSpec
 class TypedSchema
 {
   public:
+    // Load a TypedSchema from a JSON file.
+    // The file must follow the schema described in redfish_schema.json.
+    static TypedSchema fromFile(const std::string& path)
+    {
+        std::ifstream file(path);
+        if (!file)
+        {
+            throw std::runtime_error("Cannot open schema file: " + path);
+        }
+        nlohmann::json doc = nlohmann::json::parse(file);
+        return fromJson(doc);
+    }
+
+    // Load a TypedSchema from a pre-parsed nlohmann::json object.
+    static TypedSchema fromJson(const nlohmann::json& doc)
+    {
+        TypedSchema schema;
+
+        for (const auto& obj : doc.at("objects"))
+        {
+            ObjectSpec objectSpec;
+            objectSpec.name = obj.at("name").get<std::string>();
+            for (const auto& f : obj.at("fields"))
+            {
+                FieldSpec fs;
+                fs.name = f.at("name").get<std::string>();
+                fs.responseKey = f.at("responseKey").get<std::string>();
+                fs.returnType = f.at("returnType").get<std::string>();
+                fs.isList = f.value("isList", false);
+                fs.scalar = f.value("scalar", false);
+                for (const auto& a :
+                     f.value("arguments", nlohmann::json::array()))
+                {
+                    fs.arguments.push_back({a.at("name").get<std::string>(),
+                                            a.at("typeName").get<std::string>(),
+                                            a.value("required", false)});
+                }
+                objectSpec.fields[fs.name] = std::move(fs);
+            }
+            schema.addObject(std::move(objectSpec));
+        }
+
+        auto loadFields =
+            [](const nlohmann::json& arr) -> std::vector<FieldSpec> {
+            std::vector<FieldSpec> out;
+            for (const auto& f : arr)
+            {
+                FieldSpec fs;
+                fs.name = f.at("name").get<std::string>();
+                fs.responseKey = f.value("responseKey", std::string{});
+                fs.returnType = f.at("returnType").get<std::string>();
+                fs.isList = f.value("isList", false);
+                fs.scalar = f.value("scalar", false);
+                fs.redfishPath = f.value("redfishPath", std::string{});
+                for (const auto& a :
+                     f.value("arguments", nlohmann::json::array()))
+                {
+                    fs.arguments.push_back({a.at("name").get<std::string>(),
+                                            a.at("typeName").get<std::string>(),
+                                            a.value("required", false)});
+                }
+                out.push_back(std::move(fs));
+            }
+            return out;
+        };
+
+        for (auto& fs :
+             loadFields(doc.value("queries", nlohmann::json::array())))
+        {
+            schema.addRootQuery(std::move(fs));
+        }
+        for (auto& fs :
+             loadFields(doc.value("subscriptions", nlohmann::json::array())))
+        {
+            schema.addRootSubscription(std::move(fs));
+        }
+
+        return schema;
+    }
+
     void addObject(ObjectSpec objectSpec)
     {
         objects[objectSpec.name] = std::move(objectSpec);
@@ -180,8 +268,8 @@ class TypedSchema
                 seenArguments.find(spec.name) == seenArguments.end())
             {
                 throw std::runtime_error(
-                    "Missing required argument '" + spec.name +
-                    "' on field '" + field.name + "'");
+                    "Missing required argument '" + spec.name + "' on field '" +
+                    field.name + "'");
             }
         }
     }

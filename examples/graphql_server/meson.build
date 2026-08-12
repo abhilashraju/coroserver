@@ -36,6 +36,11 @@ install_data(
   install_dir: '/etc/systemd/system'
 )
 
+install_data(
+  'redfish_schema.json',
+  install_dir: '/usr/share/graphql_redfish_server'
+)
+
 message('GraphQL server handwritten parser build configured')
 
 message('GraphQL server build configured')

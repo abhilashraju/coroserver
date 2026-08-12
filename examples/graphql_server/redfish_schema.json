@@ -1,0 +1,142 @@
+{
+  "objects": [
+    {
+      "name": "ServiceRoot",
+      "fields": [
+        { "name": "id",       "responseKey": "Id",       "returnType": "String",         "isList": false, "scalar": true  },
+        { "name": "name",     "responseKey": "Name",     "returnType": "String",         "isList": false, "scalar": true  },
+        { "name": "systems",  "responseKey": "Systems",  "returnType": "CollectionLink", "isList": false, "scalar": false },
+        { "name": "chassis",  "responseKey": "Chassis",  "returnType": "CollectionLink", "isList": false, "scalar": false },
+        { "name": "managers", "responseKey": "Managers", "returnType": "CollectionLink", "isList": false, "scalar": false }
+      ]
+    },
+    {
+      "name": "CollectionLink",
+      "fields": [
+        { "name": "odataId", "responseKey": "@odata.id", "returnType": "String", "isList": false, "scalar": true }
+      ]
+    },
+    {
+      "name": "Status",
+      "fields": [
+        { "name": "health", "responseKey": "Health", "returnType": "String", "isList": false, "scalar": true },
+        { "name": "state",  "responseKey": "State",  "returnType": "String", "isList": false, "scalar": true }
+      ]
+    },
+    {
+      "name": "ProcessorSummary",
+      "fields": [
+        { "name": "count", "responseKey": "Count", "returnType": "Int",    "isList": false, "scalar": true },
+        { "name": "model", "responseKey": "Model", "returnType": "String", "isList": false, "scalar": true }
+      ]
+    },
+    {
+      "name": "IPv4Address",
+      "fields": [
+        { "name": "address",    "responseKey": "Address",    "returnType": "String", "isList": false, "scalar": true },
+        { "name": "subnetMask", "responseKey": "SubnetMask", "returnType": "String", "isList": false, "scalar": true },
+        { "name": "gateway",    "responseKey": "Gateway",    "returnType": "String", "isList": false, "scalar": true }
+      ]
+    },
+    {
+      "name": "IPv6Address",
+      "fields": [
+        { "name": "address",      "responseKey": "Address",      "returnType": "String", "isList": false, "scalar": true },
+        { "name": "prefixLength", "responseKey": "PrefixLength", "returnType": "Int",    "isList": false, "scalar": true },
+        { "name": "addressState", "responseKey": "AddressState", "returnType": "String", "isList": false, "scalar": true }
+      ]
+    },
+    {
+      "name": "NtpInfo",
+      "fields": [
+        { "name": "protocolEnabled", "responseKey": "ProtocolEnabled", "returnType": "Boolean", "isList": false, "scalar": true },
+        { "name": "ntpServers",      "responseKey": "NTPServers",      "returnType": "String",  "isList": true,  "scalar": true }
+      ]
+    },
+    {
+      "name": "ManagerNetworkProtocol",
+      "fields": [
+        { "name": "ntp", "responseKey": "NTP", "returnType": "NtpInfo", "isList": false, "scalar": false }
+      ]
+    },
+    {
+      "name": "ComputerSystem",
+      "fields": [
+        { "name": "id",               "responseKey": "Id",               "returnType": "String",           "isList": false, "scalar": true  },
+        { "name": "name",             "responseKey": "Name",             "returnType": "String",           "isList": false, "scalar": true  },
+        { "name": "powerState",       "responseKey": "PowerState",       "returnType": "String",           "isList": false, "scalar": true  },
+        { "name": "status",           "responseKey": "Status",           "returnType": "Status",           "isList": false, "scalar": false },
+        { "name": "processorSummary", "responseKey": "ProcessorSummary", "returnType": "ProcessorSummary", "isList": false, "scalar": false }
+      ]
+    },
+    {
+      "name": "Chassis",
+      "fields": [
+        { "name": "id",               "responseKey": "Id",              "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "name",             "responseKey": "Name",            "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "chassisType",      "responseKey": "ChassisType",     "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "manufacturer",     "responseKey": "Manufacturer",    "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "model",            "responseKey": "Model",           "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "serialNumber",     "responseKey": "SerialNumber",    "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "partNumber",       "responseKey": "PartNumber",      "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "assetTag",         "responseKey": "AssetTag",        "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "sku",              "responseKey": "SKU",             "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "powerState",       "responseKey": "PowerState",      "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "indicatorLed",     "responseKey": "IndicatorLED",    "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "status",           "responseKey": "Status",          "returnType": "Status", "isList": false, "scalar": false }
+      ]
+    },
+    {
+      "name": "EthernetInterface",
+      "fields": [
+        { "name": "id",            "responseKey": "Id",           "returnType": "String",      "isList": false, "scalar": true  },
+        { "name": "name",          "responseKey": "Name",         "returnType": "String",      "isList": false, "scalar": true  },
+        { "name": "macAddress",    "responseKey": "MACAddress",   "returnType": "String",      "isList": false, "scalar": true  },
+        { "name": "speedMbps",     "responseKey": "SpeedMbps",    "returnType": "Int",         "isList": false, "scalar": true  },
+        { "name": "linkStatus",    "responseKey": "LinkStatus",   "returnType": "String",      "isList": false, "scalar": true  },
+        { "name": "ipv4Addresses", "responseKey": "IPv4Addresses","returnType": "IPv4Address", "isList": true,  "scalar": false },
+        { "name": "ipv6Addresses", "responseKey": "IPv6Addresses","returnType": "IPv6Address", "isList": true,  "scalar": false },
+        { "name": "status",        "responseKey": "Status",       "returnType": "Status",      "isList": false, "scalar": false }
+      ]
+    },
+    {
+      "name": "Manager",
+      "fields": [
+        { "name": "id",     "responseKey": "Id",     "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "name",   "responseKey": "Name",   "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "status", "responseKey": "Status", "returnType": "Status", "isList": false, "scalar": false }
+      ]
+    }
+  ],
+
+  "queries": [
+    { "name": "serviceRoot",            "responseKey": "", "returnType": "ServiceRoot",           "isList": false, "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1" },
+    { "name": "systems",                "responseKey": "", "returnType": "ComputerSystem",         "isList": true,  "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1/Systems" },
+    { "name": "system",                 "responseKey": "", "returnType": "ComputerSystem",         "isList": false, "scalar": false,
+      "arguments": [{ "name": "id", "typeName": "ID", "required": true }],
+      "redfishPath": "/redfish/v1/Systems/{id}" },
+    { "name": "chassis",                "responseKey": "", "returnType": "Chassis",                "isList": true,  "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1/Chassis" },
+    { "name": "managers",               "responseKey": "", "returnType": "Manager",                "isList": true,  "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1/Managers" },
+    { "name": "ethernetInterfaces",     "responseKey": "", "returnType": "EthernetInterface",      "isList": true,  "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1/Managers/bmc/EthernetInterfaces" },
+    { "name": "managerNetworkProtocol", "responseKey": "", "returnType": "ManagerNetworkProtocol", "isList": false, "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1/Managers/bmc/NetworkProtocol" }
+  ],
+
+  "subscriptions": [
+    { "name": "systemStatus",             "responseKey": "", "returnType": "ComputerSystem",    "isList": false, "scalar": false,
+      "arguments": [{ "name": "id", "typeName": "ID", "required": true }],
+      "redfishPath": "/redfish/v1/Systems/{id}" },
+    { "name": "chassisStatus",            "responseKey": "", "returnType": "Chassis",           "isList": false, "scalar": false,
+      "arguments": [{ "name": "id", "typeName": "ID", "required": true }],
+      "redfishPath": "/redfish/v1/Chassis/{id}" },
+    { "name": "chassisUpdates",           "responseKey": "", "returnType": "Chassis",           "isList": true,  "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1/Chassis" },
+    { "name": "ethernetInterfaceUpdates", "responseKey": "", "returnType": "EthernetInterface", "isList": true,  "scalar": false, "arguments": [],
+      "redfishPath": "/redfish/v1/Managers/bmc/EthernetInterfaces" }
+  ]
+}

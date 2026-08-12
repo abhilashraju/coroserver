@@ -34,3 +34,7 @@ subdir('redfishproxy')
 #     subdir('event_broker')
 #     #subdir('spdm')
 # endif
+
+if sdbusplus_dep.found()
+    subdir('redfish_graphql_dbus_client')
+endif

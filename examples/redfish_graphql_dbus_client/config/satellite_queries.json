@@ -19,14 +19,24 @@
       }
     },
     {
-      "name": "ChassisStatus",
-      "dbus_path": "/xyz/openbmc_project/Satellite/Chassis/1",
+      "name": "ChassisUpdates",
+      "dbus_path": "/xyz/openbmc_project/Satellite/Chassis",
       "dbus_interface": "xyz.openbmc_project.Satellite.Chassis",
-      "query": "subscription { chassisStatus(id:\"chassis1\") { id name status { health state } } }",
-      "interval_seconds": 10,
+      "query": "subscription { chassisUpdates { id name chassisType manufacturer model serialNumber partNumber assetTag sku powerState indicatorLed status { health state } } }",
+      "list": true,
+      "interval_seconds": 30,
       "field_map": {
         "id":            "Id",
         "name":          "Name",
+        "chassisType":   "ChassisType",
+        "manufacturer":  "Manufacturer",
+        "model":         "Model",
+        "serialNumber":  "SerialNumber",
+        "partNumber":    "PartNumber",
+        "assetTag":      "AssetTag",
+        "sku":           "SKU",
+        "powerState":    "PowerState",
+        "indicatorLed":  "IndicatorLED",
         "status.health": "StatusHealth",
         "status.state":  "StatusState"
       }
@@ -35,17 +45,35 @@
       "name": "EthernetInterfaces",
       "dbus_path": "/xyz/openbmc_project/Satellite/Network/Interfaces",
       "dbus_interface": "xyz.openbmc_project.Satellite.EthernetInterface",
-      "query": "subscription { ethernetInterfaceUpdates { id name macAddress speedMbps linkStatus status { health state } } }",
+      "query": "subscription { ethernetInterfaceUpdates { id name macAddress speedMbps linkStatus status { health state } ipv4Addresses { address subnetMask gateway } ipv6Addresses { address prefixLength addressState } } }",
       "list": true,
       "interval_seconds": 30,
       "field_map": {
-        "id":            "Id",
-        "name":          "Name",
-        "macAddress":    "MACAddress",
-        "speedMbps":     "SpeedMbps",
-        "linkStatus":    "LinkStatus",
-        "status.health": "StatusHealth",
-        "status.state":  "StatusState"
+        "id":                          "Id",
+        "name":                        "Name",
+        "macAddress":                  "MACAddress",
+        "speedMbps":                   "SpeedMbps",
+        "linkStatus":                  "LinkStatus",
+        "status.health":               "StatusHealth",
+        "status.state":                "StatusState",
+        "ipv4Addresses.0.address":     "IPv4Address",
+        "ipv4Addresses.0.subnetMask":  "IPv4SubnetMask",
+        "ipv4Addresses.0.gateway":     "IPv4Gateway",
+        "ipv6Addresses.0.address":     "IPv6Address",
+        "ipv6Addresses.0.prefixLength":"IPv6PrefixLength",
+        "ipv6Addresses.0.addressState":"IPv6AddressState"
+      }
+    },
+    {
+      "name": "ManagerNetworkProtocol",
+      "dbus_path": "/xyz/openbmc_project/Satellite/Network/Protocol",
+      "dbus_interface": "xyz.openbmc_project.Satellite.ManagerNetworkProtocol",
+      "query": "subscription { managerNetworkProtocol { ntp { protocolEnabled ntpServers } } }",
+      "interval_seconds": 60,
+      "field_map": {
+        "ntp.protocolEnabled": "NTPEnabled",
+        "ntp.ntpServers.0":    "NTPServer0",
+        "ntp.ntpServers.1":    "NTPServer1"
       }
     }
   ]
