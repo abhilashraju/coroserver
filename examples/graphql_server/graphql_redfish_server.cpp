@@ -56,10 +56,9 @@ int main(int argc, const char* argv[])
         bool hasMtls = clientCert.has_value() && clientKey.has_value();
         if (!hasBasicAuth && !hasMtls)
         {
-            LOG_ERROR(
-                "Authentication required: provide either "
-                "--user/-u and --password/-w (basic auth) "
-                "or --client-cert/-C and --client-key/-K (mTLS)");
+            LOG_ERROR("Authentication required: provide either "
+                      "--user/-u and --password/-w (basic auth) "
+                      "or --client-cert/-C and --client-key/-K (mTLS)");
             return 1;
         }
 
@@ -89,12 +88,14 @@ int main(int argc, const char* argv[])
                                boost::asio::ssl::context::no_sslv2 |
                                boost::asio::ssl::context::single_dh_use);
 
-        std::string certFile = cert ? std::string(*cert) + "/server-cert.pem"
-                                    : "/etc/ssl/certs/https/server_cert.pem";
-        std::string keyFile = cert ? std::string(*cert) + "/server-key.pem"
-                                   : "/etc/ssl/private/server_pkey.pem";
-        sslContext.use_certificate_chain_file(certFile);
-        sslContext.use_private_key_file(keyFile,
+        // bmcweb stores both the certificate chain and the private key in one
+        // combined PEM file at /etc/ssl/certs/https/server.pem.
+        // When --cert is supplied it is treated as a directory that follows the
+        // same single-file convention (server.pem holds both).
+        std::string pemFile = cert ? std::string(*cert) + "/server.pem"
+                                   : "/etc/ssl/certs/https/server.pem";
+        sslContext.use_certificate_chain_file(pemFile);
+        sslContext.use_private_key_file(pemFile,
                                         boost::asio::ssl::context::pem);
 
         HttpRouter router;
@@ -172,10 +173,10 @@ int main(int argc, const char* argv[])
 
                 if (query.empty())
                 {
-                    nlohmann::json err = {{"errors",
-                                           {{{"message",
-                                              "Missing 'query' query-string "
-                                              "parameter"}}}}};
+                    nlohmann::json err = {
+                        {"errors",
+                         {{{"message", "Missing 'query' query-string "
+                                       "parameter"}}}}};
                     co_await writer.write(err.dump());
                     co_return;
                 }

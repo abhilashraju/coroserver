@@ -19,6 +19,9 @@ struct ArgumentSpec
     std::string name;
     std::string typeName;
     bool required = false;
+    // Default value applied when the caller omits this argument.
+    // Stored as a string because all Redfish path placeholders are strings.
+    std::string defaultValue;
 };
 
 struct FieldSpec
@@ -104,7 +107,8 @@ class TypedSchema
                 {
                     fs.arguments.push_back({a.at("name").get<std::string>(),
                                             a.at("typeName").get<std::string>(),
-                                            a.value("required", false)});
+                                            a.value("required", false),
+                                            a.value("default", std::string{})});
                 }
                 out.push_back(std::move(fs));
             }

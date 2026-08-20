@@ -260,15 +260,35 @@ class TypedExecutor
         return argumentsToJson(selection.arguments, variables);
     }
 
-    // Expand a redfishPath template by substituting {argName} placeholders
-    // with the resolved argument values from `args`.
-    // Example: expandPath("/redfish/v1/Systems/{id}", {{"id","bmc0"}})
-    //          → "/redfish/v1/Systems/bmc0"
+    // Expand a redfishPath template by substituting {argName} placeholders.
+    // Defaults from the FieldSpec argument list are applied first so that
+    // optional arguments (e.g. systemId="system") are resolved even when the
+    // caller omits them from the query string.
+    // Example: expandPath("/redfish/v1/Systems/{systemId}/PCIeDevices",
+    //                     {}, fieldSpec)  →  "/redfish/v1/Systems/system/PCIeDevices"
     static std::string expandPath(const std::string& pathTemplate,
-                                  const nlohmann::json& args)
+                                  const nlohmann::json& args,
+                                  const FieldSpec& fieldSpec)
     {
-        std::string result = pathTemplate;
+        // Seed with schema-level defaults, then overlay caller-supplied values.
+        nlohmann::json resolved = nlohmann::json::object();
+        for (const ArgumentSpec& argSpec : fieldSpec.arguments)
+        {
+            if (!argSpec.defaultValue.empty())
+            {
+                resolved[argSpec.name] = argSpec.defaultValue;
+            }
+        }
         for (auto it = args.begin(); it != args.end(); ++it)
+        {
+            if (!it.value().is_null())
+            {
+                resolved[it.key()] = it.value();
+            }
+        }
+
+        std::string result = pathTemplate;
+        for (auto it = resolved.begin(); it != resolved.end(); ++it)
         {
             const std::string placeholder = "{" + it.key() + "}";
             const std::string value = it.value().get<std::string>();
@@ -296,7 +316,8 @@ class TypedExecutor
         }
 
         nlohmann::json args = resolveArguments(selection, variables);
-        const std::string target = expandPath(fieldSpec.redfishPath, args);
+        const std::string target = expandPath(fieldSpec.redfishPath, args,
+                                              fieldSpec);
 
         nlohmann::json payload = fresh ? co_await provider->getFresh(target)
                                        : co_await provider->get(target);

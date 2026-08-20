@@ -106,6 +106,45 @@
         { "name": "name",   "responseKey": "Name",   "returnType": "String", "isList": false, "scalar": true  },
         { "name": "status", "responseKey": "Status", "returnType": "Status", "isList": false, "scalar": false }
       ]
+    },
+    {
+      "name": "PCIeInterface",
+      "fields": [
+        { "name": "pcieType",    "responseKey": "PCIeType",    "returnType": "String", "isList": false, "scalar": true },
+        { "name": "maxPcieType", "responseKey": "MaxPCIeType", "returnType": "String", "isList": false, "scalar": true },
+        { "name": "lanesInUse",  "responseKey": "LanesInUse",  "returnType": "Int",    "isList": false, "scalar": true },
+        { "name": "maxLanes",    "responseKey": "MaxLanes",    "returnType": "Int",    "isList": false, "scalar": true }
+      ]
+    },
+    {
+      "name": "PCIeFunction",
+      "fields": [
+        { "name": "id",               "responseKey": "Id",              "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "functionId",       "responseKey": "FunctionId",      "returnType": "Int",    "isList": false, "scalar": true  },
+        { "name": "deviceClass",      "responseKey": "DeviceClass",     "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "deviceId",         "responseKey": "DeviceId",        "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "vendorId",         "responseKey": "VendorId",        "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "subsystemId",      "responseKey": "SubsystemId",     "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "subsystemVendorId","responseKey": "SubsystemVendorId","returnType": "String", "isList": false, "scalar": true  },
+        { "name": "functionType",     "responseKey": "FunctionType",    "returnType": "String", "isList": false, "scalar": true  },
+        { "name": "status",           "responseKey": "Status",          "returnType": "Status", "isList": false, "scalar": false }
+      ]
+    },
+    {
+      "name": "PCIeDevice",
+      "fields": [
+        { "name": "id",            "responseKey": "Id",           "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "name",          "responseKey": "Name",         "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "manufacturer",  "responseKey": "Manufacturer", "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "model",         "responseKey": "Model",        "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "serialNumber",  "responseKey": "SerialNumber", "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "partNumber",    "responseKey": "PartNumber",   "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "sku",           "responseKey": "SKU",          "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "deviceType",    "responseKey": "DeviceType",   "returnType": "String",       "isList": false, "scalar": true  },
+        { "name": "pcieInterface", "responseKey": "PCIeInterface","returnType": "PCIeInterface", "isList": false, "scalar": false },
+        { "name": "pcieFunctions", "responseKey": "PCIeFunctions","returnType": "PCIeFunction",  "isList": true,  "scalar": false },
+        { "name": "status",        "responseKey": "Status",       "returnType": "Status",       "isList": false, "scalar": false }
+      ]
     }
   ],
 
@@ -124,7 +163,29 @@
     { "name": "ethernetInterfaces",     "responseKey": "", "returnType": "EthernetInterface",      "isList": true,  "scalar": false, "arguments": [],
       "redfishPath": "/redfish/v1/Managers/bmc/EthernetInterfaces" },
     { "name": "managerNetworkProtocol", "responseKey": "", "returnType": "ManagerNetworkProtocol", "isList": false, "scalar": false, "arguments": [],
-      "redfishPath": "/redfish/v1/Managers/bmc/NetworkProtocol" }
+      "redfishPath": "/redfish/v1/Managers/bmc/NetworkProtocol" },
+    { "name": "pcieDevices",            "responseKey": "", "returnType": "PCIeDevice",             "isList": true,  "scalar": false,
+      "arguments": [{ "name": "systemId", "typeName": "ID", "required": false, "default": "system" }],
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices" },
+    { "name": "pcieDevice",             "responseKey": "", "returnType": "PCIeDevice",             "isList": false, "scalar": false,
+      "arguments": [
+        { "name": "systemId", "typeName": "ID", "required": false, "default": "system" },
+        { "name": "id",       "typeName": "ID", "required": true  }
+      ],
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{id}" },
+    { "name": "pcieFunctions",          "responseKey": "", "returnType": "PCIeFunction",           "isList": true,  "scalar": false,
+      "arguments": [
+        { "name": "systemId",     "typeName": "ID", "required": false, "default": "system" },
+        { "name": "pcieDeviceId", "typeName": "ID", "required": true  }
+      ],
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{pcieDeviceId}/PCIeFunctions" },
+    { "name": "pcieFunction",           "responseKey": "", "returnType": "PCIeFunction",           "isList": false, "scalar": false,
+      "arguments": [
+        { "name": "systemId",     "typeName": "ID", "required": false, "default": "system" },
+        { "name": "pcieDeviceId", "typeName": "ID", "required": true  },
+        { "name": "id",           "typeName": "ID", "required": true  }
+      ],
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{pcieDeviceId}/PCIeFunctions/{id}" }
   ],
 
   "subscriptions": [
@@ -137,6 +198,15 @@
     { "name": "chassisUpdates",           "responseKey": "", "returnType": "Chassis",           "isList": true,  "scalar": false, "arguments": [],
       "redfishPath": "/redfish/v1/Chassis" },
     { "name": "ethernetInterfaceUpdates", "responseKey": "", "returnType": "EthernetInterface", "isList": true,  "scalar": false, "arguments": [],
-      "redfishPath": "/redfish/v1/Managers/bmc/EthernetInterfaces" }
+      "redfishPath": "/redfish/v1/Managers/bmc/EthernetInterfaces" },
+    { "name": "pcieDeviceUpdates",        "responseKey": "", "returnType": "PCIeDevice",        "isList": true,  "scalar": false,
+      "arguments": [{ "name": "systemId", "typeName": "ID", "required": false, "default": "system" }],
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices" },
+    { "name": "pcieDeviceStatus",         "responseKey": "", "returnType": "PCIeDevice",        "isList": false, "scalar": false,
+      "arguments": [
+        { "name": "systemId", "typeName": "ID", "required": false, "default": "system" },
+        { "name": "id",       "typeName": "ID", "required": true  }
+      ],
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{id}" }
   ]
 }
