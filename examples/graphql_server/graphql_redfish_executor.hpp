@@ -20,15 +20,15 @@ class RedfishGraphQLExecutor : public graphql::TypedExecutor<RedfishProvider>
     {}
 
   protected:
-    boost::asio::awaitable<nlohmann::json> resolveRootField(
-        const graphql::FieldSelection& selection,
-        const graphql::FieldSpec& fieldSpec,
-        const nlohmann::json& variables) override;
+    boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
+        resolveRootField(const graphql::FieldSelection& selection,
+                         const graphql::FieldSpec& fieldSpec,
+                         const nlohmann::json& variables) override;
 
-    boost::asio::awaitable<nlohmann::json> resolveSubscriptionField(
-        const graphql::FieldSelection& selection,
-        const graphql::FieldSpec& fieldSpec,
-        const nlohmann::json& variables) override;
+    boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
+        resolveSubscriptionField(const graphql::FieldSelection& selection,
+                                 const graphql::FieldSpec& fieldSpec,
+                                 const nlohmann::json& variables) override;
 };
 
 } // namespace NSNAME

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "graphql/error.hpp"
 #include "name_space.hpp"
 #include "redfish_client.hpp"
 
@@ -30,10 +31,10 @@ class RedfishProvider
 {
   public:
     virtual ~RedfishProvider() = default;
-    virtual boost::asio::awaitable<nlohmann::json> getFresh(
-        const std::string& target) = 0;
+    virtual boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
+        getFresh(const std::string& target) = 0;
 
-    virtual boost::asio::awaitable<nlohmann::json>
+    virtual boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
         get(const std::string& target) = 0;
 };
 
@@ -43,11 +44,11 @@ class HttpRedfishProvider : public RedfishProvider
     HttpRedfishProvider(boost::asio::io_context& io,
                         const RedfishProviderConfig& config);
 
-    boost::asio::awaitable<nlohmann::json> get(
+    boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>> get(
         const std::string& target) override;
 
     // getFresh bypasses the cache — used by subscriptions to get live data
-    boost::asio::awaitable<nlohmann::json> getFresh(
+    boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>> getFresh(
         const std::string& target) override;
 
   private:

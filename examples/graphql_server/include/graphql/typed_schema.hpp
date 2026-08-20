@@ -1,12 +1,12 @@
 #pragma once
 
 #include "graphql/ast.hpp"
+#include "graphql/error.hpp"
 #include "name_space.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <fstream>
-#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -50,83 +50,100 @@ class TypedSchema
   public:
     // Load a TypedSchema from a JSON file.
     // The file must follow the schema described in redfish_schema.json.
-    static TypedSchema fromFile(const std::string& path)
+    static Result<TypedSchema> fromFile(const std::string& path)
     {
         std::ifstream file(path);
         if (!file)
         {
-            throw std::runtime_error("Cannot open schema file: " + path);
+            return std::unexpected("Cannot open schema file: " + path);
         }
-        nlohmann::json doc = nlohmann::json::parse(file);
+        nlohmann::json doc = nlohmann::json::parse(file, nullptr, false);
+        if (doc.is_discarded())
+        {
+            return std::unexpected("Invalid JSON in schema file: " + path);
+        }
         return fromJson(doc);
     }
 
     // Load a TypedSchema from a pre-parsed nlohmann::json object.
-    static TypedSchema fromJson(const nlohmann::json& doc)
+    // Returns std::unexpected if the document is structurally invalid.
+    static Result<TypedSchema> fromJson(const nlohmann::json& doc)
     {
-        TypedSchema schema;
-
-        for (const auto& obj : doc.at("objects"))
+        // nlohmann::json::at() throws on missing keys; contain it here so the
+        // rest of the stack never sees exceptions from schema loading.
+        try
         {
-            ObjectSpec objectSpec;
-            objectSpec.name = obj.at("name").get<std::string>();
-            for (const auto& f : obj.at("fields"))
+            TypedSchema schema;
+
+            for (const auto& obj : doc.at("objects"))
             {
-                FieldSpec fs;
-                fs.name = f.at("name").get<std::string>();
-                fs.responseKey = f.at("responseKey").get<std::string>();
-                fs.returnType = f.at("returnType").get<std::string>();
-                fs.isList = f.value("isList", false);
-                fs.scalar = f.value("scalar", false);
-                for (const auto& a :
-                     f.value("arguments", nlohmann::json::array()))
+                ObjectSpec objectSpec;
+                objectSpec.name = obj.at("name").get<std::string>();
+                for (const auto& f : obj.at("fields"))
                 {
-                    fs.arguments.push_back({a.at("name").get<std::string>(),
-                                            a.at("typeName").get<std::string>(),
-                                            a.value("required", false)});
+                    FieldSpec fs;
+                    fs.name = f.at("name").get<std::string>();
+                    fs.responseKey = f.at("responseKey").get<std::string>();
+                    fs.returnType = f.at("returnType").get<std::string>();
+                    fs.isList = f.value("isList", false);
+                    fs.scalar = f.value("scalar", false);
+                    for (const auto& a :
+                         f.value("arguments", nlohmann::json::array()))
+                    {
+                        fs.arguments.push_back(
+                            {a.at("name").get<std::string>(),
+                             a.at("typeName").get<std::string>(),
+                             a.value("required", false)});
+                    }
+                    objectSpec.fields[fs.name] = std::move(fs);
                 }
-                objectSpec.fields[fs.name] = std::move(fs);
+                schema.addObject(std::move(objectSpec));
             }
-            schema.addObject(std::move(objectSpec));
-        }
 
-        auto loadFields =
-            [](const nlohmann::json& arr) -> std::vector<FieldSpec> {
-            std::vector<FieldSpec> out;
-            for (const auto& f : arr)
+            auto loadFields =
+                [](const nlohmann::json& arr) -> std::vector<FieldSpec> {
+                std::vector<FieldSpec> out;
+                for (const auto& f : arr)
+                {
+                    FieldSpec fs;
+                    fs.name = f.at("name").get<std::string>();
+                    fs.responseKey = f.value("responseKey", std::string{});
+                    fs.returnType = f.at("returnType").get<std::string>();
+                    fs.isList = f.value("isList", false);
+                    fs.scalar = f.value("scalar", false);
+                    fs.redfishPath = f.value("redfishPath", std::string{});
+                    for (const auto& a :
+                         f.value("arguments", nlohmann::json::array()))
+                    {
+                        fs.arguments.push_back(
+                            {a.at("name").get<std::string>(),
+                             a.at("typeName").get<std::string>(),
+                             a.value("required", false),
+                             a.value("default", std::string{})});
+                    }
+                    out.push_back(std::move(fs));
+                }
+                return out;
+            };
+
+            for (auto& fs :
+                 loadFields(doc.value("queries", nlohmann::json::array())))
             {
-                FieldSpec fs;
-                fs.name = f.at("name").get<std::string>();
-                fs.responseKey = f.value("responseKey", std::string{});
-                fs.returnType = f.at("returnType").get<std::string>();
-                fs.isList = f.value("isList", false);
-                fs.scalar = f.value("scalar", false);
-                fs.redfishPath = f.value("redfishPath", std::string{});
-                for (const auto& a :
-                     f.value("arguments", nlohmann::json::array()))
-                {
-                    fs.arguments.push_back({a.at("name").get<std::string>(),
-                                            a.at("typeName").get<std::string>(),
-                                            a.value("required", false),
-                                            a.value("default", std::string{})});
-                }
-                out.push_back(std::move(fs));
+                schema.addRootQuery(std::move(fs));
             }
-            return out;
-        };
+            for (auto& fs :
+                 loadFields(doc.value("subscriptions", nlohmann::json::array())))
+            {
+                schema.addRootSubscription(std::move(fs));
+            }
 
-        for (auto& fs :
-             loadFields(doc.value("queries", nlohmann::json::array())))
-        {
-            schema.addRootQuery(std::move(fs));
+            return schema;
         }
-        for (auto& fs :
-             loadFields(doc.value("subscriptions", nlohmann::json::array())))
+        catch (const std::exception& e)
         {
-            schema.addRootSubscription(std::move(fs));
+            return std::unexpected(
+                std::string("Schema JSON parse error: ") + e.what());
         }
-
-        return schema;
     }
 
     void addObject(ObjectSpec objectSpec)
@@ -174,12 +191,12 @@ class TypedSchema
         return &it->second;
     }
 
-    void validateOperation(const Operation& operation) const
+    Result<void> validateOperation(const Operation& operation) const
     {
         if (operation.type != Operation::Type::Query &&
             operation.type != Operation::Type::Subscription)
         {
-            throw std::runtime_error(
+            return std::unexpected(
                 "Only query and subscription operations are supported");
         }
 
@@ -191,30 +208,40 @@ class TypedSchema
                     : getRootQueryField(selection.name);
             if (fieldSpec == nullptr)
             {
-                throw std::runtime_error("Unknown field: " + selection.name);
+                return std::unexpected("Unknown field: " + selection.name);
             }
-            validateArguments(selection, *fieldSpec);
+            if (auto r = validateArguments(selection, *fieldSpec); !r)
+            {
+                return r;
+            }
             if (!fieldSpec->scalar)
             {
-                validateSelections(selection.selections, fieldSpec->returnType);
+                if (auto r = validateSelections(selection.selections,
+                                                fieldSpec->returnType);
+                    !r)
+                {
+                    return r;
+                }
             }
             else if (!selection.selections.empty())
             {
-                throw std::runtime_error(
+                return std::unexpected(
                     "Scalar field cannot have sub-selections: " +
                     selection.name);
             }
         }
+        return {};
     }
 
   private:
-    void validateSelections(const std::vector<FieldSelection>& selections,
-                            const std::string& objectTypeName) const
+    Result<void> validateSelections(
+        const std::vector<FieldSelection>& selections,
+        const std::string& objectTypeName) const
     {
         const ObjectSpec* objectSpec = getObject(objectTypeName);
         if (objectSpec == nullptr)
         {
-            throw std::runtime_error("Unknown object type: " + objectTypeName);
+            return std::unexpected("Unknown object type: " + objectTypeName);
         }
 
         for (const FieldSelection& selection : selections)
@@ -222,29 +249,38 @@ class TypedSchema
             auto fieldIt = objectSpec->fields.find(selection.name);
             if (fieldIt == objectSpec->fields.end())
             {
-                throw std::runtime_error("Unknown field '" + selection.name +
-                                         "' on type '" + objectTypeName + "'");
+                return std::unexpected("Unknown field '" + selection.name +
+                                       "' on type '" + objectTypeName + "'");
             }
 
             const FieldSpec& fieldSpec = fieldIt->second;
-            validateArguments(selection, fieldSpec);
+            if (auto r = validateArguments(selection, fieldSpec); !r)
+            {
+                return r;
+            }
             if (fieldSpec.scalar)
             {
                 if (!selection.selections.empty())
                 {
-                    throw std::runtime_error(
+                    return std::unexpected(
                         "Scalar field cannot have sub-selections: " +
                         selection.name);
                 }
                 continue;
             }
 
-            validateSelections(selection.selections, fieldSpec.returnType);
+            if (auto r =
+                    validateSelections(selection.selections, fieldSpec.returnType);
+                !r)
+            {
+                return r;
+            }
         }
+        return {};
     }
 
-    void validateArguments(const FieldSelection& field,
-                           const FieldSpec& fieldSpec) const
+    Result<void> validateArguments(const FieldSelection& field,
+                                   const FieldSpec& fieldSpec) const
     {
         std::unordered_map<std::string, bool> seenArguments;
         for (const Argument& argument : field.arguments)
@@ -261,8 +297,8 @@ class TypedSchema
             }
             if (!found)
             {
-                throw std::runtime_error("Unknown argument '" + argument.name +
-                                         "' on field '" + field.name + "'");
+                return std::unexpected("Unknown argument '" + argument.name +
+                                       "' on field '" + field.name + "'");
             }
         }
 
@@ -271,11 +307,12 @@ class TypedSchema
             if (spec.required &&
                 seenArguments.find(spec.name) == seenArguments.end())
             {
-                throw std::runtime_error(
-                    "Missing required argument '" + spec.name + "' on field '" +
-                    field.name + "'");
+                return std::unexpected(
+                    "Missing required argument '" + spec.name +
+                    "' on field '" + field.name + "'");
             }
         }
+        return {};
     }
 
     std::unordered_map<std::string, FieldSpec> rootQueries;

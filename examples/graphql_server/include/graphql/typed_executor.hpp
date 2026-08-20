@@ -1,5 +1,6 @@
 #pragma once
 
+#include "graphql/error.hpp"
 #include "graphql/parser.hpp"
 #include "graphql/typed_schema.hpp"
 #include "graphql/util.hpp"
@@ -10,7 +11,6 @@
 #include <chrono>
 #include <functional>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -25,39 +25,49 @@ class TypedExecutor
         schema(std::move(schema)), provider(std::move(provider))
     {}
 
+    // Public entry point for query execution.
+    // Always returns a well-formed GraphQL response JSON object;
+    // errors are embedded in {"errors":[...]} — no exceptions escape.
     boost::asio::awaitable<nlohmann::json> execute(
         const std::string& query,
         const nlohmann::json& variables = nlohmann::json::object())
     {
         nlohmann::json response;
 
-        try
+        Result<Operation> parseResult = Parser::tryParse(query);
+        if (!parseResult)
         {
-            std::string errorMsg;
-            if (!Parser::validate(query, errorMsg))
-            {
-                response["errors"] =
-                    nlohmann::json::array({{{"message", errorMsg}}});
-                co_return response;
-            }
-
-            Operation operation = Parser::parse(query);
-            expandFragments(operation);
-            schema.validateOperation(operation);
-
-            nlohmann::json mergedVariables = initialVariables(operation);
-            for (auto it = variables.begin(); it != variables.end(); ++it)
-            {
-                mergedVariables[it.key()] = it.value();
-            }
-
-            response["data"] = co_await executeSelections(operation.selections,
-                                                          mergedVariables);
+            response["errors"] = nlohmann::json::array();
+            response["errors"].push_back({{"message", parseResult.error()}});
+            co_return response;
         }
-        catch (const std::exception& e)
+
+        Operation operation = std::move(*parseResult);
+        expandFragments(operation);
+
+        if (auto r = schema.validateOperation(operation); !r)
         {
-            response["errors"] =
-                nlohmann::json::array({{{"message", e.what()}}});
+            response["errors"] = nlohmann::json::array();
+            response["errors"].push_back({{"message", r.error()}});
+            co_return response;
+        }
+
+        nlohmann::json mergedVariables = initialVariables(operation);
+        for (auto it = variables.begin(); it != variables.end(); ++it)
+        {
+            mergedVariables[it.key()] = it.value();
+        }
+
+        Result<nlohmann::json> dataResult =
+            co_await executeSelections(operation.selections, mergedVariables);
+        if (!dataResult)
+        {
+            response["errors"] = nlohmann::json::array();
+            response["errors"].push_back({{"message", dataResult.error()}});
+        }
+        else
+        {
+            response["data"] = std::move(*dataResult);
         }
 
         co_return response;
@@ -72,18 +82,27 @@ class TypedExecutor
         const std::string& query, const nlohmann::json& variables,
         std::chrono::steady_clock::duration interval, AsyncEventFn onEvent)
     {
-        std::string errorMsg;
-        if (!Parser::validate(query, errorMsg))
+        Result<Operation> parseResult = Parser::tryParse(query);
+        if (!parseResult)
         {
             nlohmann::json err;
-            err["errors"] = nlohmann::json::array({{{"message", errorMsg}}});
+            err["errors"] = nlohmann::json::array();
+            err["errors"].push_back({{"message", parseResult.error()}});
             co_await onEvent(std::move(err));
             co_return;
         }
 
-        Operation operation = Parser::parse(query);
+        Operation operation = std::move(*parseResult);
         expandFragments(operation);
-        schema.validateOperation(operation);
+
+        if (auto r = schema.validateOperation(operation); !r)
+        {
+            nlohmann::json err;
+            err["errors"] = nlohmann::json::array();
+            err["errors"].push_back({{"message", r.error()}});
+            co_await onEvent(std::move(err));
+            co_return;
+        }
 
         nlohmann::json mergedVariables = initialVariables(operation);
         for (auto it = variables.begin(); it != variables.end(); ++it)
@@ -97,15 +116,17 @@ class TypedExecutor
         while (true)
         {
             nlohmann::json event;
-            try
+            Result<nlohmann::json> tickResult =
+                co_await executeSubscriptionSelections(operation.selections,
+                                                       mergedVariables);
+            if (!tickResult)
             {
-                event["data"] = co_await executeSubscriptionSelections(
-                    operation.selections, mergedVariables);
+                event["errors"] = nlohmann::json::array();
+                event["errors"].push_back({{"message", tickResult.error()}});
             }
-            catch (const std::exception& e)
+            else
             {
-                event["errors"] =
-                    nlohmann::json::array({{{"message", e.what()}}});
+                event["data"] = std::move(*tickResult);
             }
 
             bool cont = co_await onEvent(std::move(event));
@@ -126,19 +147,20 @@ class TypedExecutor
     }
 
   protected:
-    virtual boost::asio::awaitable<nlohmann::json> resolveRootField(
+    virtual boost::asio::awaitable<Result<nlohmann::json>> resolveRootField(
         const FieldSelection& selection, const FieldSpec& fieldSpec,
         const nlohmann::json& variables) = 0;
 
-    virtual boost::asio::awaitable<nlohmann::json> resolveSubscriptionField(
-        const FieldSelection& selection, const FieldSpec& fieldSpec,
-        const nlohmann::json& variables)
+    virtual boost::asio::awaitable<Result<nlohmann::json>>
+        resolveSubscriptionField(const FieldSelection& selection,
+                                 const FieldSpec& fieldSpec,
+                                 const nlohmann::json& variables)
     {
         // Default: delegate to the same resolution as queries
         co_return co_await resolveRootField(selection, fieldSpec, variables);
     }
 
-    boost::asio::awaitable<nlohmann::json> executeSubscriptionSelections(
+    boost::asio::awaitable<Result<nlohmann::json>> executeSubscriptionSelections(
         const std::vector<FieldSelection>& selections,
         const nlohmann::json& variables)
     {
@@ -149,19 +171,25 @@ class TypedExecutor
                 schema.getRootSubscriptionField(selection.name);
             if (fieldSpec == nullptr)
             {
-                throw std::runtime_error(
-                    "Unknown subscription field: " + selection.name);
+                co_return std::unexpected("Unknown subscription field: " +
+                                          selection.name);
             }
 
             std::string outputName =
                 selection.alias.empty() ? selection.name : selection.alias;
-            result[outputName] = co_await resolveSubscriptionField(
-                selection, *fieldSpec, variables);
+            Result<nlohmann::json> fieldResult =
+                co_await resolveSubscriptionField(selection, *fieldSpec,
+                                                  variables);
+            if (!fieldResult)
+            {
+                co_return std::unexpected(fieldResult.error());
+            }
+            result[outputName] = std::move(*fieldResult);
         }
         co_return result;
     }
 
-    boost::asio::awaitable<nlohmann::json> executeSelections(
+    boost::asio::awaitable<Result<nlohmann::json>> executeSelections(
         const std::vector<FieldSelection>& selections,
         const nlohmann::json& variables)
     {
@@ -172,25 +200,30 @@ class TypedExecutor
                 schema.getRootQueryField(selection.name);
             if (fieldSpec == nullptr)
             {
-                throw std::runtime_error(
-                    "Unknown query field: " + selection.name);
+                co_return std::unexpected("Unknown query field: " +
+                                          selection.name);
             }
 
             std::string outputName =
                 selection.alias.empty() ? selection.name : selection.alias;
-            result[outputName] =
+            Result<nlohmann::json> fieldResult =
                 co_await resolveRootField(selection, *fieldSpec, variables);
+            if (!fieldResult)
+            {
+                co_return std::unexpected(fieldResult.error());
+            }
+            result[outputName] = std::move(*fieldResult);
         }
         co_return result;
     }
 
-    boost::asio::awaitable<nlohmann::json> projectField(
+    boost::asio::awaitable<Result<nlohmann::json>> projectField(
         const FieldSelection& selection, const FieldSpec& fieldSpec,
         const nlohmann::json& source)
     {
         if (!source.contains(fieldSpec.responseKey))
         {
-            co_return nullptr;
+            co_return nlohmann::json(nullptr);
         }
 
         const nlohmann::json& value = source[fieldSpec.responseKey];
@@ -203,15 +236,20 @@ class TypedExecutor
         {
             if (!value.is_array())
             {
-                throw std::runtime_error(
-                    "Expected array for field '" + selection.name + "'");
+                co_return std::unexpected("Expected array for field '" +
+                                          selection.name + "'");
             }
 
             nlohmann::json result = nlohmann::json::array();
             for (const auto& item : value)
             {
-                result.push_back(co_await projectObject(
-                    item, fieldSpec.returnType, selection.selections));
+                Result<nlohmann::json> itemResult = co_await projectObject(
+                    item, fieldSpec.returnType, selection.selections);
+                if (!itemResult)
+                {
+                    co_return std::unexpected(itemResult.error());
+                }
+                result.push_back(std::move(*itemResult));
             }
             co_return result;
         }
@@ -220,14 +258,14 @@ class TypedExecutor
                                          selection.selections);
     }
 
-    boost::asio::awaitable<nlohmann::json> projectObject(
+    boost::asio::awaitable<Result<nlohmann::json>> projectObject(
         const nlohmann::json& source, const std::string& typeName,
         const std::vector<FieldSelection>& selections)
     {
         const ObjectSpec* objectSpec = schema.getObject(typeName);
         if (objectSpec == nullptr)
         {
-            throw std::runtime_error("Unknown object type: " + typeName);
+            co_return std::unexpected("Unknown object type: " + typeName);
         }
 
         if (selections.empty())
@@ -241,14 +279,19 @@ class TypedExecutor
             auto fieldIt = objectSpec->fields.find(selection.name);
             if (fieldIt == objectSpec->fields.end())
             {
-                throw std::runtime_error("Unknown field '" + selection.name +
-                                         "' on type '" + typeName + "'");
+                co_return std::unexpected("Unknown field '" + selection.name +
+                                          "' on type '" + typeName + "'");
             }
 
             std::string outputName =
                 selection.alias.empty() ? selection.name : selection.alias;
-            result[outputName] =
+            Result<nlohmann::json> fieldResult =
                 co_await projectField(selection, fieldIt->second, source);
+            if (!fieldResult)
+            {
+                co_return std::unexpected(fieldResult.error());
+            }
+            result[outputName] = std::move(*fieldResult);
         }
 
         co_return result;
@@ -305,28 +348,34 @@ class TypedExecutor
     // Generic resolution driven by FieldSpec::redfishPath.
     // Subclasses can call this when the field has a redfishPath set, or
     // override resolveRootField entirely and handle only their custom cases.
-    boost::asio::awaitable<nlohmann::json> resolveByPath(
+    boost::asio::awaitable<Result<nlohmann::json>> resolveByPath(
         const FieldSelection& selection, const FieldSpec& fieldSpec,
         const nlohmann::json& variables, bool fresh = false)
     {
         if (fieldSpec.redfishPath.empty())
         {
-            throw std::runtime_error(
-                "No redfishPath defined for field: " + fieldSpec.name);
+            co_return std::unexpected("No redfishPath defined for field: " +
+                                      fieldSpec.name);
         }
 
         nlohmann::json args = resolveArguments(selection, variables);
         const std::string target = expandPath(fieldSpec.redfishPath, args,
                                               fieldSpec);
 
-        nlohmann::json payload = fresh ? co_await provider->getFresh(target)
-                                       : co_await provider->get(target);
+        Result<nlohmann::json> payloadResult =
+            fresh ? co_await provider->getFresh(target)
+                  : co_await provider->get(target);
+        if (!payloadResult)
+        {
+            co_return std::unexpected(payloadResult.error());
+        }
+        nlohmann::json payload = std::move(*payloadResult);
 
         if (fieldSpec.isList)
         {
             if (!payload.contains("Members") || !payload["Members"].is_array())
             {
-                throw std::runtime_error(
+                co_return std::unexpected(
                     "Expected collection Members array for '" + fieldSpec.name +
                     "'");
             }
@@ -338,13 +387,22 @@ class TypedExecutor
                 {
                     continue;
                 }
-                nlohmann::json item =
+                Result<nlohmann::json> itemResult =
                     fresh ? co_await provider->getFresh(
                                 member["@odata.id"].get<std::string>())
                           : co_await provider->get(
                                 member["@odata.id"].get<std::string>());
-                result.push_back(co_await projectObject(
-                    item, fieldSpec.returnType, selection.selections));
+                if (!itemResult)
+                {
+                    co_return std::unexpected(itemResult.error());
+                }
+                Result<nlohmann::json> projResult = co_await projectObject(
+                    *itemResult, fieldSpec.returnType, selection.selections);
+                if (!projResult)
+                {
+                    co_return std::unexpected(projResult.error());
+                }
+                result.push_back(std::move(*projResult));
             }
             co_return result;
         }

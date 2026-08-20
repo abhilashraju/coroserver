@@ -1,7 +1,5 @@
 #include "graphql_redfish_provider.hpp"
 
-#include <stdexcept>
-
 namespace NSNAME
 {
 
@@ -28,8 +26,8 @@ HttpRedfishProvider::HttpRedfishProvider(boost::asio::io_context& io,
         .withPassword(config.password);
 }
 
-boost::asio::awaitable<nlohmann::json> HttpRedfishProvider::get(
-    const std::string& target)
+boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
+    HttpRedfishProvider::get(const std::string& target)
 {
     auto cached = cache.find(target);
     if (cached != cache.end())
@@ -43,23 +41,23 @@ boost::asio::awaitable<nlohmann::json> HttpRedfishProvider::get(
     auto [ec, response] = co_await client.execute(request);
     if (ec)
     {
-        throw std::runtime_error("Failed Redfish request for '" + target +
-                                 "': " + ec.message());
+        co_return std::unexpected("Failed Redfish request for '" + target +
+                                  "': " + ec.message());
     }
 
     nlohmann::json parsed =
         nlohmann::json::parse(response.body(), nullptr, false);
     if (parsed.is_discarded())
     {
-        throw std::runtime_error("Invalid JSON response for '" + target + "'");
+        co_return std::unexpected("Invalid JSON response for '" + target + "'");
     }
 
     cache.emplace(target, parsed);
     co_return parsed;
 }
 
-boost::asio::awaitable<nlohmann::json> HttpRedfishProvider::getFresh(
-    const std::string& target)
+boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
+    HttpRedfishProvider::getFresh(const std::string& target)
 {
     RedfishClient::Request request;
     request.withMethod(http::verb::get).withTarget(target).witKeepAlive(false);
@@ -67,15 +65,15 @@ boost::asio::awaitable<nlohmann::json> HttpRedfishProvider::getFresh(
     auto [ec, response] = co_await client.execute(request);
     if (ec)
     {
-        throw std::runtime_error("Failed Redfish request for '" + target +
-                                 "': " + ec.message());
+        co_return std::unexpected("Failed Redfish request for '" + target +
+                                  "': " + ec.message());
     }
 
     nlohmann::json parsed =
         nlohmann::json::parse(response.body(), nullptr, false);
     if (parsed.is_discarded())
     {
-        throw std::runtime_error("Invalid JSON response for '" + target + "'");
+        co_return std::unexpected("Invalid JSON response for '" + target + "'");
     }
 
     co_return parsed;

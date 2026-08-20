@@ -18,7 +18,7 @@ constexpr const char* defaultSchemaPath = REDFISH_SCHEMA_JSON_PATH;
 #endif
 } // namespace
 
-graphql::TypedSchema buildRedfishTypedSchema()
+NSNAME::graphql::Result<NSNAME::graphql::TypedSchema> buildRedfishTypedSchema()
 {
     // Try to load the schema from the JSON file at runtime so that it can be
     // changed without recompilation.  Fall back to the hardcoded definition if
@@ -191,7 +191,7 @@ graphql::TypedSchema buildRedfishTypedSchema()
          {},
          "/redfish/v1/Managers/bmc/EthernetInterfaces"});
 
-    return schema;
+    return NSNAME::graphql::Result<NSNAME::graphql::TypedSchema>(std::move(schema));
 }
 
 } // namespace NSNAME

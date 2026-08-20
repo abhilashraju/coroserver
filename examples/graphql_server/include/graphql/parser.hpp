@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graphql/ast.hpp"
+#include "graphql/error.hpp"
 
 #include <cctype>
 #include <stdexcept>
@@ -19,6 +20,20 @@ class Parser
     {
         Impl impl(query);
         return impl.parseDocument();
+    }
+
+    // Returns the parsed Operation, or an error message on parse failure.
+    // Replaces the two-step validate()+parse() idiom used in the executor.
+    static Result<Operation> tryParse(const std::string& query)
+    {
+        try
+        {
+            return parse(query);
+        }
+        catch (const std::exception& e)
+        {
+            return std::unexpected(std::string(e.what()));
+        }
     }
 
     static bool validate(const std::string& query, std::string& errorMsg)
