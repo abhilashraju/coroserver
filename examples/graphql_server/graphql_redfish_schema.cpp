@@ -31,6 +31,7 @@ NSNAME::graphql::Result<NSNAME::graphql::TypedSchema> buildRedfishTypedSchema()
     // --- Hardcoded fallback (mirrors redfish_schema.json) ---
     graphql::TypedSchema schema;
 
+#if 0
     schema.addObject(
         {"ServiceRoot",
          {{"id", {"id", "Id", "String", false, true}},
@@ -190,8 +191,9 @@ NSNAME::graphql::Result<NSNAME::graphql::TypedSchema> buildRedfishTypedSchema()
          false,
          {},
          "/redfish/v1/Managers/bmc/EthernetInterfaces"});
-
-    return NSNAME::graphql::Result<NSNAME::graphql::TypedSchema>(std::move(schema));
+#endif
+    return NSNAME::graphql::Result<NSNAME::graphql::TypedSchema>(
+        std::move(schema));
 }
 
 } // namespace NSNAME

@@ -43,8 +43,7 @@ struct SseStream
     net::awaitable<SseFrame> next()
     {
         boost::system::error_code ec;
-        co_await timer_.async_wait(
-            net::redirect_error(net::use_awaitable, ec));
+        co_await timer_.async_wait(net::redirect_error(net::use_awaitable, ec));
         // ec == operation_aborted means timer_.cancel() was called by post().
         // Re-arm for the next frame.
         timer_.expires_at(net::steady_timer::time_point::max());
@@ -248,18 +247,17 @@ struct WebClient
         boost::system::error_code ec{};
         for (int i = 0; i < retryPolicy.maxTries; i++)
         {
+            std::string target;
             if (std::is_same_v<Stream, beast::tcp_stream>)
             {
                 auto& tcpData = std::get<TcpData>(data);
-                LOG_INFO("Trying {} connection to {}:{} ", i, tcpData.host,
-                         tcpData.port);
-
+                target = tcpData.host;
                 ec = co_await client.connect(tcpData.host, tcpData.port);
             }
             else if (std::is_same_v<Stream, unix_domain::socket>)
             {
                 auto& unixData = std::get<UnixData>(data);
-                LOG_INFO("Trying {} connection to {} ", i, unixData.path);
+                target = unixData.path;
                 ec = co_await client.connect(unixData.path, "");
             }
             if (!ec)
@@ -267,6 +265,7 @@ struct WebClient
                 isConnected = true;
                 co_return ec;
             }
+            LOG_INFO("Retrying {} connection to {} ", i + 1, target);
         }
         co_return ec;
     }
@@ -392,13 +391,12 @@ struct WebClient
         }
 
         // 5. Create the mailbox and spawn the frame producer
-        auto stream = std::make_shared<SseStream>(
-            co_await net::this_coro::executor);
+        auto stream =
+            std::make_shared<SseStream>(co_await net::this_coro::executor);
         std::string delim = request.frameDelimiter;
 
         net::co_spawn(co_await net::this_coro::executor,
-                      frameProducer(stream, std::move(delim)),
-                      net::detached);
+                      frameProducer(stream, std::move(delim)), net::detached);
 
         co_return std::make_pair(boost::system::error_code{}, stream);
     }
@@ -477,4 +475,4 @@ struct WebClient
         }
     }
 };
-}
+} // namespace NSNAME

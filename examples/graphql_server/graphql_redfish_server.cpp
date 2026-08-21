@@ -232,6 +232,14 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                                          req.version());
         });
 
+    router.add_get_handler(
+        "/graphql/subscriptions/stats",
+        [executor](Request& req, const http_function& params) -> Response {
+            nlohmann::json stats = executor->getSubscriptionStats();
+            return make_success_response(stats, http::status::ok,
+                                         req.version());
+        });
+
     // SSE subscription endpoint
     // GET /graphql/subscribe?query=subscription{systemStatus(id:"1"){...}}
     // Optional: &interval=5  (poll interval in seconds, default 5)

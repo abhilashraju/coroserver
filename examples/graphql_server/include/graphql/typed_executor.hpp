@@ -13,17 +13,51 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace NSNAME::graphql
 {
 
 template <typename Provider>
-class TypedExecutor
+class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider>>
 {
   public:
     TypedExecutor(TypedSchema schema, std::shared_ptr<Provider> provider) :
         schema(std::move(schema)), provider(std::move(provider))
     {}
+
+    nlohmann::json getSubscriptionStats() const
+    {
+        size_t activeSharedLoops = activeSubscriptions.size();
+        size_t totalClientSubscribers = 0;
+        nlohmann::json details = nlohmann::json::array();
+
+        for (const auto& [key, session] : activeSubscriptions)
+        {
+            size_t subsCount = session->subscribers.size();
+            totalClientSubscribers += subsCount;
+
+            nlohmann::json sessionDetails = {
+                {"key", key},
+                {"subscriber_count", subsCount},
+                {"last_result", session->lastResult ? *session->lastResult : nullptr}
+            };
+            details.push_back(sessionDetails);
+        }
+
+        size_t multiplexedSubscribers = 0;
+        if (totalClientSubscribers > activeSharedLoops)
+        {
+            multiplexedSubscribers = totalClientSubscribers - activeSharedLoops;
+        }
+
+        return {
+            {"active_shared_loops", activeSharedLoops},
+            {"total_client_subscribers", totalClientSubscribers},
+            {"multiplexed_subscribers", multiplexedSubscribers},
+            {"subscriptions", details}
+        };
+    }
 
     // Public entry point for query execution.
     // Always returns a well-formed GraphQL response JSON object;
@@ -73,10 +107,117 @@ class TypedExecutor
         co_return response;
     }
 
-    // Execute a subscription: calls `onEvent` for each poll result until
-    // `onEvent` returns false. Polls every `interval`.
-    // onEvent is an async callback: awaitable<bool>(nlohmann::json)
-    // returning false signals the subscriber wants to stop.
+    struct Subscriber
+    {
+        uint64_t id;
+        std::function<boost::asio::awaitable<bool>(nlohmann::json)> callback;
+        std::shared_ptr<boost::asio::steady_timer> disconnectTimer;
+    };
+
+    struct SubscriptionSession
+    {
+        std::string key;
+        std::shared_ptr<boost::asio::steady_timer> timer;
+        std::vector<Subscriber> subscribers;
+        uint64_t nextSubscriberId{1};
+        std::optional<nlohmann::json> lastResult;
+        bool active{true};
+    };
+
+    struct SubscriberCleanupGuard
+    {
+        TypedExecutor& executor;
+        std::weak_ptr<SubscriptionSession> sessionWeak;
+        uint64_t subId;
+
+        ~SubscriberCleanupGuard()
+        {
+            if (auto session = sessionWeak.lock())
+            {
+                executor.removeSubscriber(session, subId);
+                if (session->subscribers.empty())
+                {
+                    session->timer->cancel();
+                }
+            }
+        }
+    };
+
+    void removeSubscriber(std::shared_ptr<SubscriptionSession> session, uint64_t id)
+    {
+        auto it = std::find_if(session->subscribers.begin(), session->subscribers.end(),
+                               [id](const Subscriber& s) { return s.id == id; });
+        if (it != session->subscribers.end())
+        {
+            it->disconnectTimer->cancel();
+            session->subscribers.erase(it);
+        }
+    }
+
+    boost::asio::awaitable<void> runSubscriptionLoop(
+        std::shared_ptr<SubscriptionSession> session,
+        Operation operation,
+        nlohmann::json mergedVariables,
+        std::chrono::steady_clock::duration interval)
+    {
+        auto self = this->shared_from_this(); // keep executor alive
+
+        while (session->active && !session->subscribers.empty())
+        {
+            Result<nlohmann::json> tickResult =
+                co_await executeSubscriptionSelections(operation.selections,
+                                                       mergedVariables);
+
+            nlohmann::json event;
+            if (!tickResult)
+            {
+                event["errors"] = nlohmann::json::array();
+                event["errors"].push_back({{"message", tickResult.error()}});
+            }
+            else
+            {
+                event["data"] = std::move(*tickResult);
+            }
+
+            session->lastResult = event;
+
+            // Broadcast to all active subscribers
+            std::vector<uint64_t> failedSubIds;
+            for (auto& sub : session->subscribers)
+            {
+                bool ok = co_await sub.callback(event);
+                if (!ok)
+                {
+                    failedSubIds.push_back(sub.id);
+                }
+            }
+
+            // Clean up disconnected subscribers
+            for (uint64_t id : failedSubIds)
+            {
+                removeSubscriber(session, id);
+            }
+
+            if (session->subscribers.empty())
+            {
+                break;
+            }
+
+            session->timer->expires_after(interval);
+            boost::system::error_code ec;
+            co_await session->timer->async_wait(
+                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+            if (ec)
+            {
+                break;
+            }
+        }
+
+        activeSubscriptions.erase(session->key);
+    }
+
+    // Execute a subscription: identical query/variables/interval requests
+    // are coalesced into a single background polling loop.
     template <typename AsyncEventFn>
     boost::asio::awaitable<void> executeSubscription(
         const std::string& query, const nlohmann::json& variables,
@@ -110,40 +251,69 @@ class TypedExecutor
             mergedVariables[it.key()] = it.value();
         }
 
+        std::string key = query + "|" + mergedVariables.dump() + "|" + std::to_string(interval.count());
+
         auto exec = co_await boost::asio::this_coro::executor;
-        boost::asio::steady_timer timer(exec);
 
-        while (true)
+        auto it = activeSubscriptions.find(key);
+        std::shared_ptr<SubscriptionSession> session;
+        bool isNewSession = false;
+
+        if (it == activeSubscriptions.end())
         {
-            nlohmann::json event;
-            Result<nlohmann::json> tickResult =
-                co_await executeSubscriptionSelections(operation.selections,
-                                                       mergedVariables);
-            if (!tickResult)
-            {
-                event["errors"] = nlohmann::json::array();
-                event["errors"].push_back({{"message", tickResult.error()}});
-            }
-            else
-            {
-                event["data"] = std::move(*tickResult);
-            }
-
-            bool cont = co_await onEvent(std::move(event));
-            if (!cont)
-            {
-                co_return;
-            }
-
-            timer.expires_after(interval);
-            boost::system::error_code ec;
-            co_await timer.async_wait(
-                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-            if (ec)
-            {
-                co_return; // cancelled
-            }
+            session = std::make_shared<SubscriptionSession>();
+            session->key = key;
+            session->timer = std::make_shared<boost::asio::steady_timer>(exec);
+            activeSubscriptions[key] = session;
+            isNewSession = true;
         }
+        else
+        {
+            session = it->second;
+        }
+
+        auto disconnectTimer = std::make_shared<boost::asio::steady_timer>(exec);
+        disconnectTimer->expires_at(std::chrono::steady_clock::time_point::max());
+
+        uint64_t subId = session->nextSubscriberId++;
+        Subscriber subscriber{
+            subId,
+            [onEvent](nlohmann::json event) -> boost::asio::awaitable<bool> {
+                co_return co_await onEvent(std::move(event));
+            },
+            disconnectTimer
+        };
+
+        session->subscribers.push_back(std::move(subscriber));
+
+        SubscriberCleanupGuard guard{*this, session, subId};
+
+        if (isNewSession)
+        {
+            boost::asio::co_spawn(
+                exec,
+                runSubscriptionLoop(session, std::move(operation), mergedVariables, interval),
+                boost::asio::detached);
+        }
+        else if (session->lastResult)
+        {
+            boost::asio::co_spawn(
+                exec,
+                [callback = session->subscribers.back().callback, lastResult = *session->lastResult, disconnectTimer]() -> boost::asio::awaitable<void> {
+                    bool ok = co_await callback(lastResult);
+                    if (!ok)
+                    {
+                        disconnectTimer->cancel();
+                    }
+                },
+                boost::asio::detached);
+        }
+
+        boost::system::error_code ec;
+        co_await disconnectTimer->async_wait(
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+
+        co_return;
     }
 
   protected:
@@ -418,6 +588,8 @@ class TypedExecutor
 
     TypedSchema schema;
     std::shared_ptr<Provider> provider;
+
+    std::unordered_map<std::string, std::shared_ptr<SubscriptionSession>> activeSubscriptions;
 };
 
 } // namespace NSNAME::graphql
