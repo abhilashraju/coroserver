@@ -1,1 +1,1 @@
-option('spdm', type: 'feature', value: 'enabled', description: 'Enable SPDM support')
+option('spdm', type: 'feature', value: 'disabled', description: 'Enable SPDM support')

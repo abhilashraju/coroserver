@@ -12,19 +12,149 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <vector>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace NSNAME::graphql
 {
 
+// Abstract trigger: suspends the subscription loop until the next event.
+struct SubscriptionTrigger
+{
+    virtual ~SubscriptionTrigger() = default;
+    // Suspend until the next trigger fires or cancel() is called.
+    // Returns true to continue the loop, false to stop.
+    virtual boost::asio::awaitable<bool> wait() = 0;
+    // Cancel a pending wait (called by cleanup guard or event monitor).
+    virtual void cancel() = 0;
+    // Wake the loop immediately (no-op for non-event triggers).
+    virtual void fire() {}
+    // Key suffix used to form the canonical session key.
+    virtual std::string triggerKey() const = 0;
+    // Human-readable trigger type for stats.
+    virtual std::string triggerType() const = 0;
+};
+
+// Timer-based trigger: wakes the loop on a fixed interval.
+class TimerTrigger : public SubscriptionTrigger
+{
+  public:
+    TimerTrigger(boost::asio::any_io_executor exec,
+                 std::chrono::steady_clock::duration interval) :
+        timer_(std::move(exec)), interval_(interval)
+    {}
+
+    boost::asio::awaitable<bool> wait() override
+    {
+        timer_.expires_after(interval_);
+        boost::system::error_code ec;
+        co_await timer_.async_wait(
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        co_return !ec;
+    }
+
+    void cancel() override
+    {
+        timer_.cancel();
+    }
+
+    std::string triggerKey() const override
+    {
+        return std::to_string(interval_.count());
+    }
+
+    std::string triggerType() const override
+    {
+        return "timer";
+    }
+
+  private:
+    boost::asio::steady_timer timer_;
+    std::chrono::steady_clock::duration interval_;
+};
+
+// Event-based trigger: sleeps indefinitely; fire() wakes the loop immediately.
+class EventTrigger : public SubscriptionTrigger
+{
+  public:
+    explicit EventTrigger(boost::asio::any_io_executor exec) :
+        timer_(std::move(exec))
+    {
+        timer_.expires_at(std::chrono::steady_clock::time_point::max());
+    }
+
+    boost::asio::awaitable<bool> wait() override
+    {
+        // Re-arm to max before awaiting so fire() can cancel it again next
+        // time.
+        timer_.expires_at(std::chrono::steady_clock::time_point::max());
+        boost::system::error_code ec;
+        co_await timer_.async_wait(
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        // operation_aborted means fire() was called — that is the success path.
+        // Any other error (e.g. from cancel() on cleanup) means stop.
+        co_return (ec == boost::asio::error::operation_aborted);
+    }
+
+    // Wake the loop immediately (called by DbusEventMonitor).
+    void fire()
+    {
+        timer_.cancel();
+    }
+
+    void cancel() override
+    {
+        timer_.expires_at(std::chrono::steady_clock::time_point::min());
+        timer_.cancel();
+    }
+
+    std::string triggerKey() const override
+    {
+        return "event";
+    }
+
+    std::string triggerType() const override
+    {
+        return "event";
+    }
+
+  private:
+    boost::asio::steady_timer timer_;
+};
+
 template <typename Provider>
-class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider>>
+class TypedExecutor :
+    public std::enable_shared_from_this<TypedExecutor<Provider>>
 {
   public:
     TypedExecutor(TypedSchema schema, std::shared_ptr<Provider> provider) :
         schema(std::move(schema)), provider(std::move(provider))
     {}
+
+    // Called by DbusEventMonitor with the full set of GraphQL fields affected
+    // by one batch of DBus signals. Each session is checked once against the
+    // entire set and fired at most once — even if the query references several
+    // of the affected fields.
+    void notifyFieldsChanged(const std::unordered_set<std::string>& fieldNames)
+    {
+        for (auto& [key, session] : activeSubscriptions)
+        {
+            if (session->trigger->triggerType() != "event")
+            {
+                continue;
+            }
+            if (operationReferencesAnyField(session->operation, fieldNames))
+            {
+                session->trigger->fire();
+            }
+        }
+    }
+
+    const std::vector<graphql::DbusWatcher>& getDbusWatchers() const
+    {
+        return schema.getDbusWatchers();
+    }
 
     nlohmann::json getSubscriptionStats() const
     {
@@ -40,7 +170,10 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
             nlohmann::json sessionDetails = {
                 {"key", key},
                 {"subscriber_count", subsCount},
-                {"last_result", session->lastResult ? *session->lastResult : nullptr}
+                {"trigger_type",
+                 session->trigger ? session->trigger->triggerType() : "unknown"}
+                //{"last_result", session->lastResult ? *session->lastResult :
+                // nullptr}
             };
             details.push_back(sessionDetails);
         }
@@ -51,12 +184,10 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
             multiplexedSubscribers = totalClientSubscribers - activeSharedLoops;
         }
 
-        return {
-            {"active_shared_loops", activeSharedLoops},
-            {"total_client_subscribers", totalClientSubscribers},
-            {"multiplexed_subscribers", multiplexedSubscribers},
-            {"subscriptions", details}
-        };
+        return {{"active_shared_loops", activeSharedLoops},
+                {"total_client_subscribers", totalClientSubscribers},
+                {"multiplexed_subscribers", multiplexedSubscribers},
+                {"subscriptions", details}};
     }
 
     // Public entry point for query execution.
@@ -117,11 +248,12 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
     struct SubscriptionSession
     {
         std::string key;
-        std::shared_ptr<boost::asio::steady_timer> timer;
+        std::shared_ptr<SubscriptionTrigger> trigger;
         std::vector<Subscriber> subscribers;
         uint64_t nextSubscriberId{1};
         std::optional<nlohmann::json> lastResult;
         bool active{true};
+        Operation operation; // stored for notifyFieldChanged field matching
     };
 
     struct SubscriberCleanupGuard
@@ -137,16 +269,18 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
                 executor.removeSubscriber(session, subId);
                 if (session->subscribers.empty())
                 {
-                    session->timer->cancel();
+                    session->trigger->cancel();
                 }
             }
         }
     };
 
-    void removeSubscriber(std::shared_ptr<SubscriptionSession> session, uint64_t id)
+    void removeSubscriber(std::shared_ptr<SubscriptionSession> session,
+                          uint64_t id)
     {
-        auto it = std::find_if(session->subscribers.begin(), session->subscribers.end(),
-                               [id](const Subscriber& s) { return s.id == id; });
+        auto it = std::find_if(
+            session->subscribers.begin(), session->subscribers.end(),
+            [id](const Subscriber& s) { return s.id == id; });
         if (it != session->subscribers.end())
         {
             it->disconnectTimer->cancel();
@@ -156,17 +290,15 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
 
     boost::asio::awaitable<void> runSubscriptionLoop(
         std::shared_ptr<SubscriptionSession> session,
-        Operation operation,
-        nlohmann::json mergedVariables,
-        std::chrono::steady_clock::duration interval)
+        nlohmann::json mergedVariables)
     {
         auto self = this->shared_from_this(); // keep executor alive
 
         while (session->active && !session->subscribers.empty())
         {
             Result<nlohmann::json> tickResult =
-                co_await executeSubscriptionSelections(operation.selections,
-                                                       mergedVariables);
+                co_await executeSubscriptionSelections(
+                    session->operation.selections, mergedVariables);
 
             nlohmann::json event;
             if (!tickResult)
@@ -203,11 +335,8 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
                 break;
             }
 
-            session->timer->expires_after(interval);
-            boost::system::error_code ec;
-            co_await session->timer->async_wait(
-                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-            if (ec)
+            bool cont = co_await session->trigger->wait();
+            if (!cont)
             {
                 break;
             }
@@ -216,12 +345,12 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
         activeSubscriptions.erase(session->key);
     }
 
-    // Execute a subscription: identical query/variables/interval requests
+    // Execute a subscription: identical query/variables/trigger requests
     // are coalesced into a single background polling loop.
     template <typename AsyncEventFn>
     boost::asio::awaitable<void> executeSubscription(
         const std::string& query, const nlohmann::json& variables,
-        std::chrono::steady_clock::duration interval, AsyncEventFn onEvent)
+        std::shared_ptr<SubscriptionTrigger> trigger, AsyncEventFn onEvent)
     {
         Result<Operation> parseResult = Parser::tryParse(query);
         if (!parseResult)
@@ -251,7 +380,8 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
             mergedVariables[it.key()] = it.value();
         }
 
-        std::string key = query + "|" + mergedVariables.dump() + "|" + std::to_string(interval.count());
+        std::string key =
+            query + "|" + mergedVariables.dump() + "|" + trigger->triggerKey();
 
         auto exec = co_await boost::asio::this_coro::executor;
 
@@ -263,7 +393,9 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
         {
             session = std::make_shared<SubscriptionSession>();
             session->key = key;
-            session->timer = std::make_shared<boost::asio::steady_timer>(exec);
+            session->trigger = std::move(trigger);
+            session->operation = std::move(
+                operation); // one copy, shared by loop and notifyFieldChanged
             activeSubscriptions[key] = session;
             isNewSession = true;
         }
@@ -272,8 +404,10 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
             session = it->second;
         }
 
-        auto disconnectTimer = std::make_shared<boost::asio::steady_timer>(exec);
-        disconnectTimer->expires_at(std::chrono::steady_clock::time_point::max());
+        auto disconnectTimer =
+            std::make_shared<boost::asio::steady_timer>(exec);
+        disconnectTimer->expires_at(
+            std::chrono::steady_clock::time_point::max());
 
         uint64_t subId = session->nextSubscriberId++;
         Subscriber subscriber{
@@ -281,8 +415,7 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
             [onEvent](nlohmann::json event) -> boost::asio::awaitable<bool> {
                 co_return co_await onEvent(std::move(event));
             },
-            disconnectTimer
-        };
+            disconnectTimer};
 
         session->subscribers.push_back(std::move(subscriber));
 
@@ -290,16 +423,17 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
 
         if (isNewSession)
         {
-            boost::asio::co_spawn(
-                exec,
-                runSubscriptionLoop(session, std::move(operation), mergedVariables, interval),
-                boost::asio::detached);
+            boost::asio::co_spawn(exec,
+                                  runSubscriptionLoop(session, mergedVariables),
+                                  boost::asio::detached);
         }
         else if (session->lastResult)
         {
             boost::asio::co_spawn(
                 exec,
-                [callback = session->subscribers.back().callback, lastResult = *session->lastResult, disconnectTimer]() -> boost::asio::awaitable<void> {
+                [callback = session->subscribers.back().callback,
+                 lastResult = *session->lastResult,
+                 disconnectTimer]() -> boost::asio::awaitable<void> {
                     bool ok = co_await callback(lastResult);
                     if (!ok)
                     {
@@ -330,9 +464,10 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
         co_return co_await resolveRootField(selection, fieldSpec, variables);
     }
 
-    boost::asio::awaitable<Result<nlohmann::json>> executeSubscriptionSelections(
-        const std::vector<FieldSelection>& selections,
-        const nlohmann::json& variables)
+    boost::asio::awaitable<Result<nlohmann::json>>
+        executeSubscriptionSelections(
+            const std::vector<FieldSelection>& selections,
+            const nlohmann::json& variables)
     {
         nlohmann::json result = nlohmann::json::object();
         for (const FieldSelection& selection : selections)
@@ -341,8 +476,8 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
                 schema.getRootSubscriptionField(selection.name);
             if (fieldSpec == nullptr)
             {
-                co_return std::unexpected("Unknown subscription field: " +
-                                          selection.name);
+                co_return std::unexpected(
+                    "Unknown subscription field: " + selection.name);
             }
 
             std::string outputName =
@@ -370,8 +505,8 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
                 schema.getRootQueryField(selection.name);
             if (fieldSpec == nullptr)
             {
-                co_return std::unexpected("Unknown query field: " +
-                                          selection.name);
+                co_return std::unexpected(
+                    "Unknown query field: " + selection.name);
             }
 
             std::string outputName =
@@ -406,8 +541,8 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
         {
             if (!value.is_array())
             {
-                co_return std::unexpected("Expected array for field '" +
-                                          selection.name + "'");
+                co_return std::unexpected(
+                    "Expected array for field '" + selection.name + "'");
             }
 
             nlohmann::json result = nlohmann::json::array();
@@ -478,7 +613,8 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
     // optional arguments (e.g. systemId="system") are resolved even when the
     // caller omits them from the query string.
     // Example: expandPath("/redfish/v1/Systems/{systemId}/PCIeDevices",
-    //                     {}, fieldSpec)  →  "/redfish/v1/Systems/system/PCIeDevices"
+    //                     {}, fieldSpec)  →
+    //                     "/redfish/v1/Systems/system/PCIeDevices"
     static std::string expandPath(const std::string& pathTemplate,
                                   const nlohmann::json& args,
                                   const FieldSpec& fieldSpec)
@@ -524,13 +660,13 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
     {
         if (fieldSpec.redfishPath.empty())
         {
-            co_return std::unexpected("No redfishPath defined for field: " +
-                                      fieldSpec.name);
+            co_return std::unexpected(
+                "No redfishPath defined for field: " + fieldSpec.name);
         }
 
         nlohmann::json args = resolveArguments(selection, variables);
-        const std::string target = expandPath(fieldSpec.redfishPath, args,
-                                              fieldSpec);
+        const std::string target =
+            expandPath(fieldSpec.redfishPath, args, fieldSpec);
 
         Result<nlohmann::json> payloadResult =
             fresh ? co_await provider->getFresh(target)
@@ -586,10 +722,25 @@ class TypedExecutor : public std::enable_shared_from_this<TypedExecutor<Provider
                                          selection.selections);
     }
 
+    // Returns true if any top-level selection in op is present in fieldNames.
+    static bool operationReferencesAnyField(
+        const Operation& op, const std::unordered_set<std::string>& fieldNames)
+    {
+        for (const auto& sel : op.selections)
+        {
+            if (fieldNames.count(sel.name))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     TypedSchema schema;
     std::shared_ptr<Provider> provider;
 
-    std::unordered_map<std::string, std::shared_ptr<SubscriptionSession>> activeSubscriptions;
+    std::unordered_map<std::string, std::shared_ptr<SubscriptionSession>>
+        activeSubscriptions;
 };
 
 } // namespace NSNAME::graphql

@@ -131,6 +131,19 @@
       ]
     },
     {
+      "name": "Sensor",
+      "fields": [
+        { "name": "id",              "responseKey": "Id",              "returnType": "String", "isList": false, "scalar": true },
+        { "name": "name",            "responseKey": "Name",            "returnType": "String", "isList": false, "scalar": true },
+        { "name": "readingType",     "responseKey": "ReadingType",     "returnType": "String", "isList": false, "scalar": true },
+        { "name": "reading",         "responseKey": "Reading",         "returnType": "Float",  "isList": false, "scalar": true },
+        { "name": "readingUnits",    "responseKey": "ReadingUnits",    "returnType": "String", "isList": false, "scalar": true },
+        { "name": "readingRangeMax", "responseKey": "ReadingRangeMax", "returnType": "Float",  "isList": false, "scalar": true },
+        { "name": "readingRangeMin", "responseKey": "ReadingRangeMin", "returnType": "Float",  "isList": false, "scalar": true },
+        { "name": "status",          "responseKey": "Status",          "returnType": "Status", "isList": false, "scalar": false }
+      ]
+    },
+    {
       "name": "PCIeDevice",
       "fields": [
         { "name": "id",            "responseKey": "Id",           "returnType": "String",       "isList": false, "scalar": true  },
@@ -207,6 +220,54 @@
         { "name": "systemId", "typeName": "ID", "required": false, "default": "system" },
         { "name": "id",       "typeName": "ID", "required": true  }
       ],
-      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{id}" }
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{id}" },
+    { "name": "sensorUpdates",            "responseKey": "", "returnType": "Sensor",            "isList": true,  "scalar": false,
+      "arguments": [{ "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" }],
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors" }
+  ],
+
+  "dbusWatchers": [
+    {
+      "dbusObject":    "/xyz/openbmc_project/state/host0",
+      "dbusInterface": "xyz.openbmc_project.State.Host",
+      "dbusProperty":  "CurrentHostState",
+      "graphqlFields": ["systemStatus"]
+    },
+    {
+      "dbusObject":    "/xyz/openbmc_project/state/chassis0",
+      "dbusInterface": "xyz.openbmc_project.State.Chassis",
+      "dbusProperty":  "CurrentPowerState",
+      "graphqlFields": ["chassisStatus", "chassisUpdates"]
+    },
+    {
+      "dbusObject":    "",
+      "dbusInterface": "xyz.openbmc_project.Network.EthernetInterface",
+      "dbusProperty":  "",
+      "graphqlFields": ["ethernetInterfaceUpdates"]
+    },
+    {
+      "dbusObject":    "",
+      "dbusInterface": "xyz.openbmc_project.Inventory.Item.PCIeDevice",
+      "dbusProperty":  "",
+      "graphqlFields": ["pcieDeviceUpdates", "pcieDeviceStatus"]
+    },
+    {
+      "dbusObject":    "",
+      "dbusInterface": "xyz.openbmc_project.Sensor.Value",
+      "dbusProperty":  "Value",
+      "graphqlFields": ["sensorUpdates"]
+    },
+    {
+      "dbusObject":    "",
+      "dbusInterface": "xyz.openbmc_project.Sensor.Threshold.Warning",
+      "dbusProperty":  "",
+      "graphqlFields": ["sensorUpdates"]
+    },
+    {
+      "dbusObject":    "",
+      "dbusInterface": "xyz.openbmc_project.Sensor.Threshold.Critical",
+      "dbusProperty":  "",
+      "graphqlFields": ["sensorUpdates"]
+    }
   ]
 }

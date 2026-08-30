@@ -2,6 +2,7 @@
 
 #include "logger.hpp"
 #include "name_space.hpp"
+#include "redfish_client.hpp"
 #include "webclient.hpp"
 
 #include <nlohmann/json.hpp>
@@ -15,9 +16,37 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace NSNAME;
+
+// ---------------------------------------------------------------------------
+// Authentication configuration
+// ---------------------------------------------------------------------------
+
+/// Username + password used to obtain a Redfish session token.
+/// On startup the bridge calls RedfishClient::getToken() which POSTs to
+/// /redfish/v1/SessionService/Sessions and returns the X-Auth-Token.
+/// All SSE streams then carry that token as an X-Auth-Token header.
+struct PasswordAuth
+{
+    std::string username;
+    std::string password;
+};
+
+/// Mutual-TLS (mTLS) credentials.
+/// The PEM files are loaded into the ssl::context before the first connection.
+/// No separate login step is needed — the client certificate IS the identity.
+struct MtlsAuth
+{
+    std::string certFile; ///< Path to client certificate PEM
+    std::string keyFile;  ///< Path to client private-key PEM
+};
+
+/// Holds whichever authentication style was configured — or nothing (monostate)
+/// when the server requires no client authentication.
+using AuthConfig = std::variant<std::monostate, PasswordAuth, MtlsAuth>;
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -38,7 +67,8 @@ struct SubscriptionConfig
     /// True if the subscription returns an array of objects (one DBus object
     /// per element). False (default) for a single scalar object.
     bool isList{false};
-    /// Dot-path in payload → DBus property name.  "status.health" → "StatusHealth"
+    /// Dot-path in payload → DBus property name.  "status.health" →
+    /// "StatusHealth"
     std::map<std::string, std::string> fieldMap;
 };
 
@@ -46,6 +76,7 @@ struct BridgeConfig
 {
     std::string host{"localhost"};
     std::string port{"8444"};
+    AuthConfig auth; ///< Authentication — PasswordAuth, MtlsAuth, or none.
     std::vector<SubscriptionConfig> subscriptions;
 };
 
@@ -53,8 +84,8 @@ struct BridgeConfig
 // Config loader — returns std::expected, never throws.
 // ---------------------------------------------------------------------------
 
-inline std::expected<BridgeConfig, std::string>
-    loadBridgeConfig(const std::string& path)
+inline std::expected<BridgeConfig, std::string> loadBridgeConfig(
+    const std::string& path)
 {
     std::ifstream f(path);
     if (!f)
@@ -68,17 +99,64 @@ inline std::expected<BridgeConfig, std::string>
     cfg.host = doc.value("host", "localhost");
     cfg.port = doc.value("port", "8444");
 
+    // ---- optional auth block -----------------------------------------------
+    // Supported shapes:
+    //
+    //   "auth": { "type": "password", "username": "admin",
+    //             "password": "s3cr3t" }
+    //
+    //     → Calls RedfishClient::getToken() at startup.  All SSE streams carry
+    //       the returned X-Auth-Token header.  Token is auto-refreshed on 401.
+    //
+    //   "auth": { "type": "mtls", "cert_file": "/path/to/client.crt",
+    //                             "key_file":  "/path/to/client.key" }
+    //
+    //     → Loads the client certificate into the TLS context; no login POST.
+    //
+    if (doc.contains("auth") && doc["auth"].is_object())
+    {
+        const auto& a = doc["auth"];
+        std::string authType = a.value("type", "");
+        if (authType == "password")
+        {
+            PasswordAuth pa;
+            pa.username = a.value("username", "");
+            pa.password = a.value("password", "");
+            if (pa.username.empty())
+                return std::unexpected("auth.username must not be empty");
+            if (pa.password.empty())
+                return std::unexpected("auth.password must not be empty");
+            cfg.auth = std::move(pa);
+        }
+        else if (authType == "mtls")
+        {
+            MtlsAuth ma;
+            ma.certFile = a.value("cert_file", "");
+            ma.keyFile = a.value("key_file", "");
+            if (ma.certFile.empty() || ma.keyFile.empty())
+                return std::unexpected(
+                    "auth.cert_file and auth.key_file must not be empty");
+            cfg.auth = std::move(ma);
+        }
+        else if (!authType.empty())
+        {
+            return std::unexpected(
+                "auth.type must be 'password' or 'mtls', got: " + authType);
+        }
+    }
+    // ------------------------------------------------------------------------
+
     for (const auto& s : doc.value("subscriptions", nlohmann::json::array()))
     {
         SubscriptionConfig sc;
-        sc.name            = s.value("name", "");
-        sc.dbusPath        = s.value("dbus_path",
-                                     "/xyz/openbmc_project/Satellite/Unknown");
-        sc.dbusInterface   = s.value("dbus_interface",
-                                     "xyz.openbmc_project.Satellite.Unknown");
-        sc.query           = s.value("query", "");
+        sc.name = s.value("name", "");
+        sc.dbusPath =
+            s.value("dbus_path", "/xyz/openbmc_project/Satellite/Unknown");
+        sc.dbusInterface =
+            s.value("dbus_interface", "xyz.openbmc_project.Satellite.Unknown");
+        sc.query = s.value("query", "");
         sc.intervalSeconds = s.value("interval_seconds", 10);
-        sc.isList          = s.value("list", false);
+        sc.isList = s.value("list", false);
 
         if (s.contains("field_map") && s["field_map"].is_object())
         {
@@ -100,8 +178,8 @@ inline std::expected<BridgeConfig, std::string>
 // Returns std::nullopt when any segment is missing or out of range.
 // ---------------------------------------------------------------------------
 
-inline std::optional<std::reference_wrapper<const nlohmann::json>>
-    jsonAtPath(const nlohmann::json& root, const std::string& dotPath)
+inline std::optional<std::reference_wrapper<const nlohmann::json>> jsonAtPath(
+    const nlohmann::json& root, const std::string& dotPath)
 {
     const nlohmann::json* cur = &root;
     std::string seg;
@@ -182,10 +260,10 @@ class DbusObjectProxy
             server_.remove_interface(iface_);
     }
 
-    DbusObjectProxy(const DbusObjectProxy&)            = delete;
+    DbusObjectProxy(const DbusObjectProxy&) = delete;
     DbusObjectProxy& operator=(const DbusObjectProxy&) = delete;
-    DbusObjectProxy(DbusObjectProxy&&)                 = delete;
-    DbusObjectProxy& operator=(DbusObjectProxy&&)      = delete;
+    DbusObjectProxy(DbusObjectProxy&&) = delete;
+    DbusObjectProxy& operator=(DbusObjectProxy&&) = delete;
 
     // Safe to call from a coroutine — set_property does not flush sd_bus.
     bool applyUpdate(const nlohmann::json& payload,
@@ -218,11 +296,16 @@ class DbusObjectProxy
   private:
     static std::string toStr(const nlohmann::json& v)
     {
-        if (v.is_string())          return v.get<std::string>();
-        if (v.is_number_integer())  return std::to_string(v.get<int64_t>());
-        if (v.is_number_unsigned()) return std::to_string(v.get<uint64_t>());
-        if (v.is_number_float())    return std::to_string(v.get<double>());
-        if (v.is_boolean())         return v.get<bool>() ? "true" : "false";
+        if (v.is_string())
+            return v.get<std::string>();
+        if (v.is_number_integer())
+            return std::to_string(v.get<int64_t>());
+        if (v.is_number_unsigned())
+            return std::to_string(v.get<uint64_t>());
+        if (v.is_number_float())
+            return std::to_string(v.get<double>());
+        if (v.is_boolean())
+            return v.get<bool>() ? "true" : "false";
         return v.dump();
     }
 
@@ -282,9 +365,10 @@ class DbusObjectRegistry
 // ---------------------------------------------------------------------------
 // SseSubscriptionClient
 //
-// Uses TcpClient to open a persistent TLS connection to graphql_redfish_server:
+// Opens a persistent TLS connection to the graphql_redfish_server:
 //
 //   GET /graphql/subscribe?query=<url-encoded>&interval=<secs> HTTP/1.1
+//   X-Auth-Token: <token>           ← present when auth is configured
 //
 // The server responds with a chunked SSE stream:
 //
@@ -297,14 +381,14 @@ class DbusObjectRegistry
 class SseSubscriptionClient
 {
   public:
-    SseSubscriptionClient(boost::asio::io_context& ioc,
-                          boost::asio::ssl::context& sslCtx,
-                          const std::string& host, const std::string& port,
-                          const SubscriptionConfig& cfg,
-                          DbusObjectProxy* scalarProxy,
-                          DbusObjectRegistry* listRegistry) :
+    SseSubscriptionClient(
+        boost::asio::io_context& ioc, boost::asio::ssl::context& sslCtx,
+        const std::string& host, const std::string& port,
+        const SubscriptionConfig& cfg, DbusObjectProxy* scalarProxy,
+        DbusObjectRegistry* listRegistry, std::string authToken = {}) :
         ioc_(ioc), sslCtx_(sslCtx), host_(host), port_(port), cfg_(cfg),
-        scalarProxy_(scalarProxy), listRegistry_(listRegistry)
+        scalarProxy_(scalarProxy), listRegistry_(listRegistry),
+        authToken_(std::move(authToken))
     {}
 
     void start()
@@ -328,10 +412,11 @@ class SseSubscriptionClient
             auto ec = co_await runStream();
             if (ec)
             {
-                LOG_ERROR("[{}] SSE error: {} — retrying in {}s", cfg_.name,
-                          ec.message(),
-                          std::chrono::duration_cast<std::chrono::seconds>(
-                              backoff).count());
+                LOG_ERROR(
+                    "[{}] SSE error: {} — retrying in {}s", cfg_.name,
+                    ec.message(),
+                    std::chrono::duration_cast<std::chrono::seconds>(backoff)
+                        .count());
             }
             else
             {
@@ -361,9 +446,13 @@ class SseSubscriptionClient
         wc.withHost(host_)
             .withPort(port_)
             .withTarget("/graphql/subscribe")
-            .withParams({{"query",    urlEncode(cfg_.query)},
+            .withParams({{"query", urlEncode(cfg_.query)},
                          {"interval", std::to_string(cfg_.intervalSeconds)}})
             .withFrameDelimiter("\n\n");
+
+        // Attach the session token when present (password auth or mTLS login).
+        if (!authToken_.empty())
+            wc.withHeaders({{"X-Auth-Token", authToken_}});
 
         auto [ec, stream] = co_await wc.executeAsStream();
         if (ec)
@@ -422,8 +511,7 @@ class SseSubscriptionClient
     // a payload was rejected without an exception being raised.
     // Shape: { "data": { "<field>": { ... } | [ ... ] } }
     // -----------------------------------------------------------------------
-    std::expected<void, std::string>
-        dispatchEvent(const std::string& rawJson)
+    std::expected<void, std::string> dispatchEvent(const std::string& rawJson)
     {
         auto event =
             nlohmann::json::parse(rawJson, nullptr, /*exceptions=*/false);
@@ -518,8 +606,9 @@ class SseSubscriptionClient
     std::string host_;
     std::string port_;
     const SubscriptionConfig& cfg_;
-    DbusObjectProxy*     scalarProxy_{nullptr};  // for scalar subscriptions
-    DbusObjectRegistry*  listRegistry_{nullptr}; // for list subscriptions
+    DbusObjectProxy* scalarProxy_{nullptr};     // for scalar subscriptions
+    DbusObjectRegistry* listRegistry_{nullptr}; // for list subscriptions
+    std::string authToken_;                     // X-Auth-Token value, or empty
 };
 
 // ---------------------------------------------------------------------------
@@ -542,15 +631,17 @@ class GraphqlDbusBridge
         if (!maybeCfg)
             return std::unexpected(maybeCfg.error());
 
-        return std::make_unique<GraphqlDbusBridge>(
-            ioc, std::move(conn), std::move(*maybeCfg));
+        return std::make_unique<GraphqlDbusBridge>(ioc, std::move(conn),
+                                                   std::move(*maybeCfg));
     }
 
+    // Spawn the bridge as a detached coroutine.
+    // For PasswordAuth: calls RedfishClient::getToken() first, then starts all
+    // SSE streams with the obtained X-Auth-Token.
+    // For MtlsAuth / no-auth: starts SSE streams immediately.
     void start()
     {
-        for (auto& c : clients_)
-            c->start();
-        LOG_INFO("GraphqlDbusBridge started ({} SSE streams)", clients_.size());
+        net::co_spawn(ioc_, run(), net::detached);
     }
 
     GraphqlDbusBridge(boost::asio::io_context& ioc,
@@ -563,44 +654,114 @@ class GraphqlDbusBridge
         sslCtx_ = std::make_unique<boost::asio::ssl::context>(
             boost::asio::ssl::context::tlsv12_client);
         sslCtx_->set_default_verify_paths();
+
+        // mTLS: load client certificate + private key synchronously.
+        // cert/key loading is safe before ioc.run() — no network I/O.
+        if (auto* ma = std::get_if<MtlsAuth>(&cfg_.auth))
+        {
+            // sslCtx_->set_verify_mode(boost::asio::ssl::verify_peer);
+            boost::system::error_code ec;
+            sslCtx_->use_certificate_chain_file(ma->certFile, ec);
+            if (ec)
+                throw std::runtime_error("mTLS: cannot load cert '" +
+                                         ma->certFile + "': " + ec.message());
+            sslCtx_->use_private_key_file(ma->keyFile,
+                                          boost::asio::ssl::context::pem, ec);
+            if (ec)
+                throw std::runtime_error("mTLS: cannot load key '" +
+                                         ma->keyFile + "': " + ec.message());
+            LOG_INFO("Bridge: mTLS configured (cert={}, key={})", ma->certFile,
+                     ma->keyFile);
+        }
+
+        // No auth — accept self-signed certs on dev servers.
         sslCtx_->set_verify_mode(boost::asio::ssl::verify_none);
 
+        // Pre-create all DBus proxies/registries here, before ioc.run(),
+        // so sdbusplus initialize() is safe.
         for (const auto& sub : cfg_.subscriptions)
         {
-            // Scalar proxies are pre-created here (before ioc.run()) so that
-            // sdbusplus initialize() is safe. List registries are created here
-            // too; individual per-item proxies are created lazily via net::post
-            // when new item ids arrive in SSE events.
-            bool isList = sub.isList;
-
-            DbusObjectProxy*    scalarProxy  = nullptr;
-            DbusObjectRegistry* listRegistry = nullptr;
-
-            if (isList)
+            if (sub.isList)
             {
                 registries_.push_back(std::make_unique<DbusObjectRegistry>(
                     objServer_, sub.dbusInterface, sub.fieldMap));
-                listRegistry = registries_.back().get();
             }
             else
             {
-                // Scalar — pre-create before ioc.run() so initialize() is safe.
                 proxies_.push_back(std::make_unique<DbusObjectProxy>(
                     objServer_, sub.dbusPath, sub.dbusInterface, sub.fieldMap));
-                scalarProxy = proxies_.back().get();
             }
+        }
+    }
+
+  private:
+    // -----------------------------------------------------------------------
+    // Main coroutine — obtains auth token if needed, then starts SSE streams.
+    // -----------------------------------------------------------------------
+    net::awaitable<void> run()
+    {
+        std::string authToken;
+
+        if (auto* pa = std::get_if<PasswordAuth>(&cfg_.auth))
+        {
+            // Use RedfishClient which already knows how to POST to
+            // /redfish/v1/SessionService/Sessions via withUserName/withPassword
+            // and extract the X-Auth-Token from the response.
+            LOG_INFO("Bridge: logging in as '{}'…", pa->username);
+
+            RedfishClient rc(ioc_, *sslCtx_);
+            rc.withHost(cfg_.host)
+                .withPort(cfg_.port)
+                .withUserName(pa->username)
+                .withPassword(pa->password);
+
+            auto [ec, token] = co_await rc.getToken();
+            if (ec)
+            {
+                LOG_ERROR("Bridge: login failed for user '{}' — {}",
+                          pa->username, ec.message());
+                co_return;
+            }
+            authToken = std::move(token);
+            LOG_INFO("Bridge: X-Auth-Token acquired");
+        }
+        else if (std::holds_alternative<MtlsAuth>(cfg_.auth))
+        {
+            LOG_INFO("Bridge: using mTLS — no login step required");
+        }
+        else
+        {
+            LOG_INFO("Bridge: no authentication configured");
+        }
+
+        // Wire up SSE clients now that we have the token (or mTLS context).
+        std::size_t proxyIdx = 0;
+        std::size_t registryIdx = 0;
+
+        for (const auto& sub : cfg_.subscriptions)
+        {
+            DbusObjectProxy* scalarProxy = nullptr;
+            DbusObjectRegistry* listRegistry = nullptr;
+
+            if (sub.isList)
+                listRegistry = registries_[registryIdx++].get();
+            else
+                scalarProxy = proxies_[proxyIdx++].get();
 
             clients_.push_back(std::make_unique<SseSubscriptionClient>(
-                ioc_, *sslCtx_, cfg_.host, cfg_.port, sub,
-                scalarProxy, listRegistry));
+                ioc_, *sslCtx_, cfg_.host, cfg_.port, sub, scalarProxy,
+                listRegistry, authToken));
+            clients_.back()->start();
         }
+
+        LOG_INFO("GraphqlDbusBridge started ({} SSE streams)", clients_.size());
     }
 
     boost::asio::io_context& ioc_;
     sdbusplus::asio::object_server objServer_;
     BridgeConfig cfg_;
     std::unique_ptr<boost::asio::ssl::context> sslCtx_;
-    std::vector<std::unique_ptr<DbusObjectProxy>>    proxies_;
+    std::vector<std::unique_ptr<DbusObjectProxy>> proxies_;
     std::vector<std::unique_ptr<DbusObjectRegistry>> registries_;
     std::vector<std::unique_ptr<SseSubscriptionClient>> clients_;
 };

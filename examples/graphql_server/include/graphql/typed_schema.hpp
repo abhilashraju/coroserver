@@ -45,6 +45,18 @@ struct ObjectSpec
     std::unordered_map<std::string, FieldSpec> fields;
 };
 
+// Maps a DBus object/interface/property tuple to one or more GraphQL
+// subscription field names that should be woken when the signal fires.
+// dbusObject and dbusProperty may be empty to act as wildcards (match any).
+// dbusInterface is required.
+struct DbusWatcher
+{
+    std::string dbusObject;    // e.g. "/xyz/openbmc_project/state/host0"  (empty = any object)
+    std::string dbusInterface; // e.g. "xyz.openbmc_project.State.Host"
+    std::string dbusProperty;  // e.g. "CurrentHostState"  (empty = any property on interface)
+    std::vector<std::string> graphqlFields; // subscription field names to wake
+};
+
 class TypedSchema
 {
   public:
@@ -137,6 +149,18 @@ class TypedSchema
                 schema.addRootSubscription(std::move(fs));
             }
 
+            for (const auto& entry :
+                 doc.value("dbusWatchers", nlohmann::json::array()))
+            {
+                DbusWatcher w;
+                w.dbusObject = entry.value("dbusObject", std::string{});
+                w.dbusInterface = entry.at("dbusInterface").get<std::string>();
+                w.dbusProperty = entry.value("dbusProperty", std::string{});
+                w.graphqlFields =
+                    entry.at("graphqlFields").get<std::vector<std::string>>();
+                schema.addDbusWatcher(std::move(w));
+            }
+
             return schema;
         }
         catch (const std::exception& e)
@@ -159,6 +183,16 @@ class TypedSchema
     void addRootSubscription(FieldSpec fieldSpec)
     {
         rootSubscriptions[fieldSpec.name] = std::move(fieldSpec);
+    }
+
+    void addDbusWatcher(DbusWatcher w)
+    {
+        dbusWatchers.push_back(std::move(w));
+    }
+
+    const std::vector<DbusWatcher>& getDbusWatchers() const
+    {
+        return dbusWatchers;
     }
 
     const FieldSpec* getRootQueryField(const std::string& name) const
@@ -318,6 +352,7 @@ class TypedSchema
     std::unordered_map<std::string, FieldSpec> rootQueries;
     std::unordered_map<std::string, FieldSpec> rootSubscriptions;
     std::unordered_map<std::string, ObjectSpec> objects;
+    std::vector<DbusWatcher> dbusWatchers;
 };
 
 } // namespace NSNAME::graphql

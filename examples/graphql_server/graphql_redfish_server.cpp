@@ -1,4 +1,5 @@
 #include "command_line_parser.hpp"
+#include "dbus_property_watcher.hpp"
 #include "graphql_redfish_executor.hpp"
 #include "graphql_redfish_provider.hpp"
 #include "graphql_redfish_schema.hpp"
@@ -227,7 +228,16 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                  {{"systemStatus",
                    "Stream live updates for a ComputerSystem (arg: id)"},
                   {"chassisStatus",
-                   "Stream live updates for a Chassis (arg: id)"}}}};
+                   "Stream live updates for a Chassis (arg: id)"}}},
+                {"events",
+                 {{"POST /graphql/events",
+                   "Inject an event to fire matching subscriptions immediately. "
+                   "Body: {\"fields\":[\"fieldName\",...]}"}}},
+                {"triggerModes",
+                 {{"event",
+                   "DBus-driven or externally injected — wakes on signal (default)"},
+                  {"timer",
+                   "Poll on fixed interval (use &interval=N, default 5s)"}}}};
             return make_success_response(schemaDoc, http::status::ok,
                                          req.version());
         });
@@ -240,16 +250,71 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                                          req.version());
         });
 
+    // External event injection endpoint.
+    // POST /graphql/events
+    // Body: { "fields": ["fieldName1", "fieldName2", ...] }
+    //
+    // Fires all active event-triggered subscription sessions whose query
+    // references at least one of the named fields. This lets any external
+    // process (e.g. a BMC daemon, a test harness, or a Redfish event hook)
+    // push an immediate update without waiting for the next DBus signal.
+    //
+    // Example:
+    //   curl -sk -X POST https://localhost:8444/graphql/events \
+    //        -H 'Content-Type: application/json' \
+    //        -d '{"fields":["chassisStatus","systemStatus"]}'
+    router.add_post_handler(
+        "/graphql/events",
+        [executor](Request& req, const http_function& params)
+            -> net::awaitable<Response> {
+            nlohmann::json body =
+                nlohmann::json::parse(req.body(), nullptr, false);
+
+            if (body.is_discarded() || !body.contains("fields") ||
+                !body["fields"].is_array())
+            {
+                co_return make_bad_request_error(
+                    "Request body must be JSON with a 'fields' array",
+                    req.version());
+            }
+
+            std::unordered_set<std::string> fields;
+            for (const auto& item : body["fields"])
+            {
+                if (item.is_string())
+                {
+                    fields.insert(item.get<std::string>());
+                }
+            }
+
+            if (fields.empty())
+            {
+                co_return make_bad_request_error(
+                    "'fields' array must contain at least one string",
+                    req.version());
+            }
+
+            executor->notifyFieldsChanged(fields);
+
+            nlohmann::json response = {
+                {"fired", true},
+                {"fields", nlohmann::json(fields)}
+            };
+            co_return make_success_response(response, http::status::ok,
+                                            req.version());
+        });
+
     // SSE subscription endpoint
     // GET /graphql/subscribe?query=subscription{systemStatus(id:"1"){...}}
-    // Optional: &interval=5  (poll interval in seconds, default 5)
+    // Optional: &interval=5        poll interval in seconds (default 5, timer mode)
+    // Optional: &trigger=event     use DBus event trigger instead of timer
     router.add_sse_handler(
         "/graphql/subscribe",
         [executor](Request& req, const http_function& params,
                    SseWriter writer) -> net::awaitable<void> {
             // parse_function already split and URL-decoded the query string
             std::string query = params["query"];
-            std::string intervalStr = params["interval"];
+            std::string triggerParam = params["trigger"]; // "timer" (default) or "event"
 
             if (query.empty())
             {
@@ -260,19 +325,32 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                 co_return;
             }
 
-            std::expected<int, std::string> maybeInterval =
-                parseInterval(intervalStr);
-            if (!maybeInterval)
+            auto exec = co_await net::this_coro::executor;
+
+            // Build the appropriate trigger based on the 'trigger' parameter.
+            std::shared_ptr<graphql::SubscriptionTrigger> trigger;
+            if (triggerParam == "event")
             {
-                nlohmann::json err = {{"errors",
-                                       {{{"message", maybeInterval.error()}}}}};
-                co_await writer.write(err.dump());
-                co_return;
+                trigger = std::make_shared<graphql::EventTrigger>(exec);
             }
-            auto interval = std::chrono::seconds(*maybeInterval);
+            else
+            {
+                std::string intervalStr = params["interval"];
+                std::expected<int, std::string> maybeInterval =
+                    parseInterval(intervalStr);
+                if (!maybeInterval)
+                {
+                    nlohmann::json err = {
+                        {"errors", {{{"message", maybeInterval.error()}}}}};
+                    co_await writer.write(err.dump());
+                    co_return;
+                }
+                trigger = std::make_shared<graphql::TimerTrigger>(
+                    exec, std::chrono::seconds(*maybeInterval));
+            }
 
             co_await executor->executeSubscription(
-                query, nlohmann::json::object(), interval,
+                query, nlohmann::json::object(), std::move(trigger),
                 [&writer](nlohmann::json event) -> net::awaitable<bool> {
                     // Serialize the event and push it to the SSE stream.
                     // writer.write returns false when the client has gone.
@@ -283,6 +361,16 @@ std::expected<void, std::string> run(int argc, const char* argv[])
 
     TcpStreamType acceptor(ioContext.get_executor(), serverPort, sslContext);
     HttpServer server(ioContext, acceptor, router);
+
+    // Register a single bus-wide PropertiesChanged watcher. It filters signals
+    // through the DbusWatcherIndex from the schema and wakes only the sessions
+    // whose queries reference the changed fields.
+    auto conn = std::make_shared<sdbusplus::asio::connection>(ioContext);
+    auto propertyWatcher = std::make_shared<GraphQLDbusPropertyWatcher>(
+        conn, executor->getDbusWatchers(),
+        [executor](const std::unordered_set<std::string>& fields) {
+            executor->notifyFieldsChanged(fields);
+        });
 
     LOG_INFO("Redfish GraphQL Server started on port {}", serverPort);
     LOG_INFO("Querying Redfish target {}:{}", providerConfig.host,

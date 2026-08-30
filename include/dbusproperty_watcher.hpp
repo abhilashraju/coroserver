@@ -70,12 +70,12 @@ struct DbusWatcher : std::enable_shared_from_this<Derived>
         auto h = makeWatchHandler();
         while (true)
         {
-            LOG_DEBUG("Waiting for Dbus property change...");
+            // LOG_DEBUG("Waiting for Dbus property change...");
             PropType res{};
             std::tie(ec, res) = co_await h();
             if (!ec)
             {
-                LOG_DEBUG("Dbus property changed, notifying callback");
+                // LOG_DEBUG("Dbus property changed, notifying callback");
                 co_await callback(ec, std::optional(std::move(res)));
                 continue;
             }
@@ -362,7 +362,7 @@ struct DbusSignalWatcher : public DbusWatcher<DbusSignalWatcher<TYPE>, TYPE>
     {
         if constexpr (std::is_same_v<PropType, sdbusplus::message_t>)
         {
-            LOG_DEBUG("Received Signal message");
+            // LOG_DEBUG("Received Signal message");
             BASE::notifyChange(boost::system::error_code{}, std::move(msg));
             return;
         }

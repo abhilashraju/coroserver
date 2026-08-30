@@ -1,6 +1,7 @@
 {
-  "host": "localhost",
+  "host": "bmc.peer",
   "port": "18080",
+  "auth": { "type": "mtls", "cert_file": "/etc/ssl/certs/https/client_cert.pem", "key_file": "/etc/ssl/private/client_pkey.pem" },
   "subscriptions": [
     {
       "name": "SystemStatus",

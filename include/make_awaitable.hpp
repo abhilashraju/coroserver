@@ -175,15 +175,15 @@ void invoke_handler_with_promise(Handler&& handler, HandlerFunc&& h)
 template <typename... Ret, typename HandlerFunc>
 auto make_awaitable_handler(HandlerFunc&& h)
 {
-    return [h = std::move(h)]() -> AwaitableResult<Ret...> {
+    return [h = std::forward<HandlerFunc>(h)]() -> AwaitableResult<Ret...> {
         co_return co_await net::async_initiate<
             const net::use_awaitable_t<>,
             ReturnTuple<Ret...>(ReturnTuple<Ret...>)>(
-            [h = std::move(h)](auto handler) {
+            [](auto handler, auto h) {
                 invoke_handler_with_promise<Ret...>(std::move(handler),
                                                     std::move(h));
             },
-            net::use_awaitable);
+            net::use_awaitable, std::move(h));
     };
 }
 } // namespace NSNAME
