@@ -107,20 +107,25 @@ using InterfaceMap = std::map<std::string, PropertyMap>;
  */
 template <typename... RetTypes, typename... InputArgs>
 inline auto awaitable_dbus_method_call(
-    sdbusplus::asio::connection& bus, const std::string& service,
-    const std::string& objpath, const std::string& interf,
-    const std::string& method, const InputArgs&... a)
+    sdbusplus::asio::connection& bus, std::string service,
+    std::string objpath, std::string interf,
+    std::string method, InputArgs... a)
     -> AwaitableResult<RetTypes...>
 {
-    auto h = make_awaitable_handler<RetTypes...>([&](auto promise) {
-        bus.async_method_call(
-            [promise = std::move(promise)](boost::system::error_code ec,
-                                           RetTypes... values) mutable {
-                promise.setValues(ec, std::move(values)...);
-            },
-            service, objpath, interf, method, a...);
-    });
-    co_return co_await h();
+    return make_awaitable<RetTypes...>(
+        [](auto promise, sdbusplus::asio::connection& bus,
+           std::string service, std::string objpath,
+           std::string interf, std::string method,
+           InputArgs... a) {
+            bus.async_method_call(
+                [promise = std::move(promise)](boost::system::error_code ec,
+                                               RetTypes... values) mutable {
+                    promise.setValues(ec, std::move(values)...);
+                },
+                service, objpath, interf, method, a...);
+        })(
+        bus, std::move(service), std::move(objpath), std::move(interf),
+        std::move(method), std::move(a)...);
 }
 
 /**

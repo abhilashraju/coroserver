@@ -40,13 +40,13 @@ inline DbusWatcherIndex buildDbusWatcherIndex(
 // Resolve all GraphQL field names affected by a (object, interface, property)
 // triple. Tries four specificity levels, from most to least specific:
 //   1. object + interface + property
-//   2. object + interface + ""        (any property on this iface for this object)
+//   2. object + interface + ""        (any property on this iface for this
+//   object)
 //   3. ""     + interface + property  (any object, specific property)
 //   4. ""     + interface + ""        (any object, any property on interface)
-inline std::vector<std::string> resolveFields(const DbusWatcherIndex& index,
-                                              const std::string& object,
-                                              const std::string& iface,
-                                              const std::string& property)
+inline std::vector<std::string> resolveFields(
+    const DbusWatcherIndex& index, const std::string& object,
+    const std::string& iface, const std::string& property)
 {
     std::vector<std::string> fields;
     auto collect = [&](const std::string& key) {
@@ -83,15 +83,13 @@ inline std::vector<std::string> resolveFields(const DbusWatcherIndex& index,
 class GraphQLDbusPropertyWatcher
 {
   public:
-    using NotifyFn =
-        std::function<void(const std::unordered_set<std::string>& graphqlFields)>;
+    using NotifyFn = std::function<void(
+        const std::unordered_set<std::string>& graphqlFields)>;
 
     GraphQLDbusPropertyWatcher(
         std::shared_ptr<sdbusplus::asio::connection> conn,
-        const std::vector<graphql::DbusWatcher>& watchers,
-        NotifyFn notifyFn) :
-        conn_(conn),
-        index_(buildDbusWatcherIndex(watchers)),
+        const std::vector<graphql::DbusWatcher>& watchers, NotifyFn notifyFn) :
+        conn_(conn), index_(buildDbusWatcherIndex(watchers)),
         notifyFn_(std::move(notifyFn))
     {
         // One bus-wide rule for all PropertiesChanged signals.
@@ -106,61 +104,60 @@ class GraphQLDbusPropertyWatcher
 
         net::co_spawn(
             conn_->get_io_context(),
-            watcher_->watch(
-                [this, watcher = watcher_](
-                    const boost::system::error_code& ec,
-                    std::optional<sdbusplus::message_t> maybeMsg)
-                    -> net::awaitable<void> {
-                    if (ec || !maybeMsg)
-                    {
-                        co_return;
-                    }
-
-                    sdbusplus::message_t msg = std::move(*maybeMsg);
-                    const std::string objectPath = msg.get_path();
-
-                    std::string interfaceName;
-                    PropertyMap changedProperties;
-                    std::vector<std::string> invalidatedProperties;
-
-                    try
-                    {
-                        msg.read(interfaceName, changedProperties,
-                                 invalidatedProperties);
-                    }
-                    catch (const std::exception&)
-                    {
-                        co_return; // malformed signal — skip
-                    }
-
-                    // Resolve all changed and invalidated property names to
-                    // GraphQL fields. Deduplicate so notifyFn_ is called once
-                    // per signal regardless of how many properties changed.
-                    std::unordered_set<std::string> affectedFields;
-                    for (const auto& [prop, value] : changedProperties)
-                    {
-                        for (const auto& field :
-                             resolveFields(index_, objectPath, interfaceName, prop))
-                        {
-                            affectedFields.insert(field);
-                        }
-                    }
-                    for (const auto& prop : invalidatedProperties)
-                    {
-                        for (const auto& field :
-                             resolveFields(index_, objectPath, interfaceName, prop))
-                        {
-                            affectedFields.insert(field);
-                        }
-                    }
-
-                    if (!affectedFields.empty())
-                    {
-                        notifyFn_(affectedFields);
-                    }
-
+            watcher_->watch([this, watcher = watcher_](
+                                const boost::system::error_code& ec,
+                                std::optional<sdbusplus::message_t> maybeMsg)
+                                -> net::awaitable<void> {
+                if (ec || !maybeMsg)
+                {
                     co_return;
-                }),
+                }
+
+                sdbusplus::message_t msg = std::move(*maybeMsg);
+                const std::string objectPath = msg.get_path();
+
+                std::string interfaceName;
+                PropertyMap changedProperties;
+                std::vector<std::string> invalidatedProperties;
+
+                try
+                {
+                    msg.read(interfaceName, changedProperties,
+                             invalidatedProperties);
+                }
+                catch (const std::exception&)
+                {
+                    co_return; // malformed signal — skip
+                }
+
+                // Resolve all changed and invalidated property names to
+                // GraphQL fields. Deduplicate so notifyFn_ is called once
+                // per signal regardless of how many properties changed.
+                std::unordered_set<std::string> affectedFields;
+                for (const auto& [prop, value] : changedProperties)
+                {
+                    for (const auto& field :
+                         resolveFields(index_, objectPath, interfaceName, prop))
+                    {
+                        affectedFields.insert(field);
+                    }
+                }
+                for (const auto& prop : invalidatedProperties)
+                {
+                    for (const auto& field :
+                         resolveFields(index_, objectPath, interfaceName, prop))
+                    {
+                        affectedFields.insert(field);
+                    }
+                }
+
+                if (!affectedFields.empty())
+                {
+                    notifyFn_(affectedFields);
+                }
+
+                co_return;
+            }),
             net::detached);
     }
 

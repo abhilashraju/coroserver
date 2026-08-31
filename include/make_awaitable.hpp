@@ -186,4 +186,31 @@ auto make_awaitable_handler(HandlerFunc&& h)
             net::use_awaitable, std::move(h));
     };
 }
+
+/**
+ * @brief Returns a coroutine lambda that accepts (HandlerFunc, args...) and
+ * produces an AwaitableResult — zero captures at every layer.
+ *
+ * Usage:
+ *   co_await make_awaitable<Ret...>()(h, bus, service, ...);
+ *
+ * Or store and call later:
+ *   auto coro = make_awaitable<Ret...>();
+ *   co_await coro(h, bus, service, ...);
+ *
+ * The returned lambda owns no state. When invoked, its parameters live in
+ * the inner coroutine frame for the entire synchronous initiation window,
+ * so [&] inside make_awaitable_handler is safe.
+ */
+template <typename... Ret, typename HandlerFunc>
+auto make_awaitable(HandlerFunc h)
+{
+    return [h = std::move(h)]<typename... Args>(
+               Args&&... args) -> AwaitableResult<Ret...> {
+        co_return co_await make_awaitable_handler<Ret...>(
+            [&](auto promise) {
+                h(std::move(promise), std::forward<Args>(args)...);
+            })();
+    };
+}
 } // namespace NSNAME

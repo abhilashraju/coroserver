@@ -1,10 +1,10 @@
 #include "command_line_parser.hpp"
-#include "dbus_property_watcher.hpp"
 #include "graphql_redfish_executor.hpp"
 #include "graphql_redfish_provider.hpp"
 #include "graphql_redfish_schema.hpp"
 #include "http_server.hpp"
 #include "logger.hpp"
+#include "ql_dbus_property_watcher.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -32,8 +32,8 @@ std::expected<int, std::string> parseIntString(const std::string& str,
 {
     if (str.empty())
     {
-        return std::unexpected("Invalid '" + paramName +
-                               "': value must not be empty");
+        return std::unexpected(
+            "Invalid '" + paramName + "': value must not be empty");
     }
 
     const char* p = str.c_str();
@@ -43,15 +43,15 @@ std::expected<int, std::string> parseIntString(const std::string& str,
     }
     if (*p == '\0')
     {
-        return std::unexpected("Invalid '" + paramName +
-                               "': must be an integer");
+        return std::unexpected(
+            "Invalid '" + paramName + "': must be an integer");
     }
     for (; *p != '\0'; ++p)
     {
         if (*p < '0' || *p > '9')
         {
-            return std::unexpected("Invalid '" + paramName +
-                                   "': must be an integer");
+            return std::unexpected(
+                "Invalid '" + paramName + "': must be an integer");
         }
     }
 
@@ -68,10 +68,9 @@ std::expected<int, std::string> parseInterval(const std::string& intervalStr)
         return kIntervalDefaultSecs;
     }
 
-    return parseIntString(intervalStr, "interval")
-        .transform([](int v) {
-            return std::clamp(v, kIntervalMinSecs, kIntervalMaxSecs);
-        });
+    return parseIntString(intervalStr, "interval").transform([](int v) {
+        return std::clamp(v, kIntervalMinSecs, kIntervalMaxSecs);
+    });
 }
 
 // Returns the server port as an integer on success, or an error message on
@@ -126,7 +125,8 @@ std::expected<void, std::string> run(int argc, const char* argv[])
     auto schemaResult = buildRedfishTypedSchema();
     if (!schemaResult)
     {
-        return std::unexpected("Failed to build schema: " + schemaResult.error());
+        return std::unexpected(
+            "Failed to build schema: " + schemaResult.error());
     }
 
     auto executor = std::make_shared<RedfishGraphQLExecutor>(
@@ -153,7 +153,8 @@ std::expected<void, std::string> run(int argc, const char* argv[])
         return std::unexpected("Failed to load certificate chain from '" +
                                pemFile + "': " + ec.message());
     }
-    sslContext.use_private_key_file(pemFile, boost::asio::ssl::context::pem, ec);
+    sslContext.use_private_key_file(pemFile, boost::asio::ssl::context::pem,
+                                    ec);
     if (ec)
     {
         return std::unexpected("Failed to load private key from '" + pemFile +
@@ -177,15 +178,15 @@ std::expected<void, std::string> run(int argc, const char* argv[])
 
     router.add_post_handler(
         "/graphql",
-        [executor](Request& req, const http_function& params)
-            -> net::awaitable<Response> {
+        [executor](Request& req,
+                   const http_function& params) -> net::awaitable<Response> {
             nlohmann::json requestBody =
                 nlohmann::json::parse(req.body(), nullptr, false);
 
             if (requestBody.is_discarded())
             {
-                co_return make_bad_request_error(
-                    "Invalid JSON in request body", req.version());
+                co_return make_bad_request_error("Invalid JSON in request body",
+                                                 req.version());
             }
 
             if (!requestBody.contains("query"))
@@ -206,8 +207,7 @@ std::expected<void, std::string> run(int argc, const char* argv[])
         });
 
     router.add_get_handler(
-        "/health",
-        [](Request& req, const http_function& params) -> Response {
+        "/health", [](Request& req, const http_function& params) -> Response {
             nlohmann::json response = {{"status", "healthy"},
                                        {"service", "Redfish GraphQL Server"}};
             return make_success_response(response, http::status::ok,
@@ -215,8 +215,7 @@ std::expected<void, std::string> run(int argc, const char* argv[])
         });
 
     router.add_get_handler(
-        "/schema",
-        [](Request& req, const http_function& params) -> Response {
+        "/schema", [](Request& req, const http_function& params) -> Response {
             nlohmann::json schemaDoc = {
                 {"queries",
                  {{"serviceRoot", "Get Redfish service root"},
@@ -265,8 +264,8 @@ std::expected<void, std::string> run(int argc, const char* argv[])
     //        -d '{"fields":["chassisStatus","systemStatus"]}'
     router.add_post_handler(
         "/graphql/events",
-        [executor](Request& req, const http_function& params)
-            -> net::awaitable<Response> {
+        [executor](Request& req,
+                   const http_function& params) -> net::awaitable<Response> {
             nlohmann::json body =
                 nlohmann::json::parse(req.body(), nullptr, false);
 
@@ -296,31 +295,32 @@ std::expected<void, std::string> run(int argc, const char* argv[])
 
             executor->notifyFieldsChanged(fields);
 
-            nlohmann::json response = {
-                {"fired", true},
-                {"fields", nlohmann::json(fields)}
-            };
+            nlohmann::json response = {{"fired", true},
+                                       {"fields", nlohmann::json(fields)}};
             co_return make_success_response(response, http::status::ok,
                                             req.version());
         });
 
     // SSE subscription endpoint
     // GET /graphql/subscribe?query=subscription{systemStatus(id:"1"){...}}
-    // Optional: &interval=5        poll interval in seconds (default 5, timer mode)
-    // Optional: &trigger=event     use DBus event trigger instead of timer
+    // Optional: &interval=5        poll interval in seconds (default 5, timer
+    // mode) Optional: &trigger=event     use DBus event trigger instead of
+    // timer
     router.add_sse_handler(
         "/graphql/subscribe",
         [executor](Request& req, const http_function& params,
                    SseWriter writer) -> net::awaitable<void> {
             // parse_function already split and URL-decoded the query string
             std::string query = params["query"];
-            std::string triggerParam = params["trigger"]; // "timer" (default) or "event"
+            std::string triggerParam =
+                params["trigger"]; // "timer" (default) or "event"
 
             if (query.empty())
             {
                 nlohmann::json err = {
                     {"errors",
-                     {{{"message", "Missing 'query' query-string parameter"}}}}};
+                     {{{"message",
+                        "Missing 'query' query-string parameter"}}}}};
                 co_await writer.write(err.dump());
                 co_return;
             }
