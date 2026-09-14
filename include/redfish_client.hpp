@@ -19,7 +19,6 @@ struct RedfishClient
         std::map<std::string, std::string> params;
         int version{11};
         std::map<std::string, std::string> headers;
-        bool keepAlive{false};
 
         Request& withMethod(http::verb m)
         {
@@ -41,11 +40,6 @@ struct RedfishClient
             headers = h;
             return *this;
         }
-        Request& witKeepAlive(bool ka)
-        {
-            keepAlive = ka;
-            return *this;
-        }
     };
 
     net::io_context& ioc;
@@ -57,11 +51,20 @@ struct RedfishClient
     std::string host;
     std::string port{"443"};
     std::string protocol{"https"};
+    std::shared_ptr<ConnectionPool<beast::tcp_stream>> pool_;
+
     std::string baseUrl() const
     {
         return protocol + "://" + host + ":" + port + "/redfish/v1";
     }
-    RedfishClient(net::io_context& ioc, ssl::context& ctx) : ioc(ioc), ctx(ctx)
+    RedfishClient(
+        net::io_context& ioc, ssl::context& ctx,
+        std::shared_ptr<ConnectionPool<beast::tcp_stream>> pool = nullptr) :
+        ioc(ioc), ctx(ctx),
+        pool_(
+            pool
+                ? pool
+                : std::make_shared<ConnectionPool<beast::tcp_stream>>(ioc, ctx))
     {}
 
     RedfishClient(const RedfishClient&) = delete;
@@ -96,6 +99,7 @@ struct RedfishClient
 
     AwaitableResult<boost::system::error_code, std::string> getToken()
     {
+        // Token fetch uses a short-lived connection — no need to keep-alive.
         WebClient<beast::tcp_stream> webClient(ioc, ctx);
         webClient.withHost(host)
             .withPort(port)
@@ -116,26 +120,26 @@ struct RedfishClient
                     boost::system::errc::permission_denied),
                 std::string{});
         }
-        std::string token = res.base().at("X-Auth-Token");
-        co_return std::make_tuple(boost::system::error_code{}, token);
+        std::string newToken = res.base().at("X-Auth-Token");
+        co_return std::make_tuple(boost::system::error_code{}, newToken);
     }
+
     AwaitableResult<Response> execute(const Request& req)
     {
         int retryCount = 0;
         while (retryCount++ < 3)
         {
-            WebClient<beast::tcp_stream> webClient(ioc, ctx);
-            webClient.withHost(host)
+            WebClient<beast::tcp_stream> client(pool_);
+            client.withHost(host)
                 .withPort(port)
                 .withMethod(req.method)
                 .withTarget(req.target)
-                .withHeaders(req.headers)
                 .withBody(req.body)
-                .witKeepAlive(req.keepAlive);
-            webClient.withHeaders({{"X-Auth-Token", token},
-                                   {"Content-Type", "application/json"}});
+                .withKeepAlive(true)
+                .withHeaders({{"X-Auth-Token", token},
+                              {"Content-Type", "application/json"}});
 
-            auto [ec, res] = co_await webClient.execute<Response>();
+            auto [ec, res] = co_await client.execute<Response>();
             if (ec)
             {
                 LOG_ERROR("Error executing request: {}", ec.message());
@@ -160,6 +164,9 @@ struct RedfishClient
             }
             co_return std::make_tuple(ec, res);
         }
+        co_return std::make_tuple(boost::system::errc::make_error_code(
+                                      boost::system::errc::timed_out),
+                                  Response{});
     }
 };
 } // namespace NSNAME

@@ -121,16 +121,53 @@ std::expected<void, std::string> run(int argc, const char* argv[])
     auto provider =
         std::make_shared<HttpRedfishProvider>(ioContext, providerConfig);
 
-    // Build the schema (might fail if the on-disk JSON file is malformed).
+    // Build the schema once — it is pure static data (GraphQL type definitions)
+    // independent of which Redfish host is queried.  Keep it in a shared_ptr so
+    // resolveExecutor can copy it cheaply for per-remoteIp executors without
+    // re-reading the file from disk.
     auto schemaResult = buildRedfishTypedSchema();
     if (!schemaResult)
     {
         return std::unexpected(
             "Failed to build schema: " + schemaResult.error());
     }
+    auto schema =
+        std::make_shared<graphql::TypedSchema>(std::move(*schemaResult));
 
-    auto executor = std::make_shared<RedfishGraphQLExecutor>(
-        std::move(*schemaResult), provider);
+    auto executor = std::make_shared<RedfishGraphQLExecutor>(*schema, provider);
+
+    // Returns the default executor when remoteIp is empty or matches the
+    // configured default host. Otherwise creates a fresh provider+executor
+    // targeting that host (same port and auth). The schema is copied from the
+    // already-parsed shared_ptr — no file I/O per request.
+    // Cache one executor per remoteIp so the authentication token (sharedToken
+    // inside HttpRedfishProvider) is preserved across SSE reconnects.
+    // Without this, every reconnect creates a brand-new unauthenticated
+    // provider that has to re-authenticate from scratch, which can fail with
+    // permission_denied when the BMC session limit is reached.
+    std::unordered_map<std::string, std::shared_ptr<RedfishGraphQLExecutor>>
+        remoteExecutors;
+
+    auto resolveExecutor = [&ioContext, &providerConfig, &executor, schema,
+                            &remoteExecutors](const std::string& remoteIp)
+        -> std::shared_ptr<RedfishGraphQLExecutor> {
+        if (remoteIp.empty() || remoteIp == providerConfig.host)
+        {
+            return executor;
+        }
+        auto it = remoteExecutors.find(remoteIp);
+        if (it != remoteExecutors.end())
+        {
+            return it->second;
+        }
+        RedfishProviderConfig remoteConfig = providerConfig;
+        remoteConfig.host = remoteIp;
+        auto remoteExec = std::make_shared<RedfishGraphQLExecutor>(
+            *schema,
+            std::make_shared<HttpRedfishProvider>(ioContext, remoteConfig));
+        remoteExecutors.emplace(remoteIp, remoteExec);
+        return remoteExec;
+    };
 
     boost::asio::ssl::context sslContext(boost::asio::ssl::context::sslv23);
     sslContext.set_options(boost::asio::ssl::context::default_workarounds |
@@ -176,10 +213,11 @@ std::expected<void, std::string> run(int argc, const char* argv[])
     HttpRouter router;
     router.setIoContext(ioContext);
 
+    // POST /graphql?remoteIp=<host>  (remoteIp is optional)
     router.add_post_handler(
         "/graphql",
-        [executor](Request& req,
-                   const http_function& params) -> net::awaitable<Response> {
+        [resolveExecutor](Request& req, const http_function& params)
+            -> net::awaitable<Response> {
             nlohmann::json requestBody =
                 nlohmann::json::parse(req.body(), nullptr, false);
 
@@ -201,7 +239,8 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                                            : nlohmann::json::object();
 
             nlohmann::json response =
-                co_await executor->execute(query, variables);
+                co_await resolveExecutor(params["remoteIp"])
+                    ->execute(query, variables);
             co_return make_success_response(response, http::status::ok,
                                             req.version());
         });
@@ -259,8 +298,8 @@ std::expected<void, std::string> run(int argc, const char* argv[])
     // push an immediate update without waiting for the next DBus signal.
     //
     // Example:
-    //   curl -sk -X POST https://localhost:8444/graphql/events \
-    //        -H 'Content-Type: application/json' \
+    //   curl -sk -X POST https://localhost:8444/graphql/events
+    //        -H 'Content-Type: application/json'
     //        -d '{"fields":["chassisStatus","systemStatus"]}'
     router.add_post_handler(
         "/graphql/events",
@@ -301,15 +340,12 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                                             req.version());
         });
 
-    // SSE subscription endpoint
-    // GET /graphql/subscribe?query=subscription{systemStatus(id:"1"){...}}
-    // Optional: &interval=5        poll interval in seconds (default 5, timer
-    // mode) Optional: &trigger=event     use DBus event trigger instead of
-    // timer
+    // GET /graphql/subscribe?query=...&remoteIp=<host>
+    // Optional params: &interval=5  &trigger=event  &remoteIp=<host>
     router.add_sse_handler(
         "/graphql/subscribe",
-        [executor](Request& req, const http_function& params,
-                   SseWriter writer) -> net::awaitable<void> {
+        [resolveExecutor](Request& req, const http_function& params,
+                          SseWriter writer) -> net::awaitable<void> {
             // parse_function already split and URL-decoded the query string
             std::string query = params["query"];
             std::string triggerParam =
@@ -326,6 +362,9 @@ std::expected<void, std::string> run(int argc, const char* argv[])
             }
 
             auto exec = co_await net::this_coro::executor;
+
+            // Optional remoteIp: route Redfish calls to the specified host.
+            auto activeExecutor = resolveExecutor(params["remoteIp"]);
 
             // Build the appropriate trigger based on the 'trigger' parameter.
             std::shared_ptr<graphql::SubscriptionTrigger> trigger;
@@ -349,11 +388,9 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                     exec, std::chrono::seconds(*maybeInterval));
             }
 
-            co_await executor->executeSubscription(
+            co_await activeExecutor->executeSubscription(
                 query, nlohmann::json::object(), std::move(trigger),
                 [&writer](nlohmann::json event) -> net::awaitable<bool> {
-                    // Serialize the event and push it to the SSE stream.
-                    // writer.write returns false when the client has gone.
                     bool ok = co_await writer.write(event.dump());
                     co_return ok;
                 });

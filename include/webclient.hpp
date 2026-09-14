@@ -1,11 +1,16 @@
 #pragma once
 #include "boost/url.hpp"
+#include "connection_pool.hpp"
 #include "http_client.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <map>
+#include <memory>
 #include <optional>
+#include <string>
+#include <variant>
+
 namespace NSNAME
 {
 
@@ -76,26 +81,32 @@ concept WebClientOrElseFunction =
     requires(T t, boost::system::error_code ec) {
         { t(ec) } -> std::same_as<AwaitableResult<boost::system::error_code>>;
     };
+
+/**
+ * @brief HTTP/HTTPS/Unix client builder and executor backed by ConnectionPool.
+ *
+ * All requests lease connections from a ConnectionPool (with keep-alive reuse,
+ * idle connection expiry, and per-host limits), exactly like Java's HttpClient.
+ */
 template <typename Stream>
 struct WebClient
 {
     struct TcpData
     {
         std::string host;
-        std::string port;
+        std::string port{"443"};
     };
     struct UnixData
     {
         std::string path;
     };
-    HttpClient<Stream> client;
 
     std::variant<TcpData, UnixData> data;
 
     struct WebRequest
     {
         http::verb method{http::verb::get};
-        std::string target;
+        std::string target{"/"};
         std::string body;
         std::map<std::string, std::string> params;
         int version{11};
@@ -103,6 +114,7 @@ struct WebClient
         bool keepAlive{true};
         std::string frameDelimiter{"\n\n"}; // used by executeAsStream()
     } request;
+
     std::function<AwaitableResult<boost::system::error_code>(Response)>
         thenHandler;
 
@@ -115,24 +127,23 @@ struct WebClient
         int maxTries{3};
     };
     RetryPolicy retryPolicy;
-    bool isConnected{false};
-    WebClient(net::io_context& ioc, ssl::context& ctx) : client(ioc, ctx)
+
+    std::shared_ptr<ConnectionPool<Stream>> pool_;
+
+    /// Construct WebClient with an explicit shared ConnectionPool instance
+    explicit WebClient(std::shared_ptr<ConnectionPool<Stream>> pool) :
+        pool_(std::move(pool))
     {
-        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
-        {
-            data = TcpData{};
-        }
-        else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
-        {
-            data = UnixData{};
-        }
-        thenHandler = [](Response response)
-            -> AwaitableResult<boost::system::error_code> {
-            LOG_INFO("Response: {}", response.body());
-            co_return boost::system::error_code{};
-        };
-        orElseHandler = [](boost::system::error_code ec)
-            -> AwaitableResult<boost::system::error_code> { co_return ec; };
+        initDefaults();
+    }
+
+    /// Construct WebClient with io_context and ssl_context, creating or using a
+    /// pool
+    WebClient(net::io_context& ioc, ssl::context& ctx,
+              ConnectionPoolConfig poolConfig = {}) :
+        pool_(std::make_shared<ConnectionPool<Stream>>(ioc, ctx, poolConfig))
+    {
+        initDefaults();
     }
 
     WebClient(const WebClient&) = delete;
@@ -146,7 +157,14 @@ struct WebClient
         std::get<TcpData>(data).host = h;
         return *this;
     }
+
     WebClient& witKeepAlive(bool keepAlive)
+    {
+        request.keepAlive = keepAlive;
+        return *this;
+    }
+
+    WebClient& withKeepAlive(bool keepAlive)
     {
         request.keepAlive = keepAlive;
         return *this;
@@ -171,41 +189,49 @@ struct WebClient
         retryPolicy.maxTries = maxRetries;
         return *this;
     }
+
     WebClient& withMethod(http::verb m)
     {
         request.method = m;
         return *this;
     }
+
     WebClient& withTarget(const std::string& t)
     {
         request.target = t;
         return *this;
     }
+
     WebClient& withParams(std::map<std::string, std::string> p)
     {
         request.params = std::move(p);
         return *this;
     }
+
     WebClient& withFrameDelimiter(std::string delim)
     {
         request.frameDelimiter = std::move(delim);
         return *this;
     }
+
     WebClient& withHeaders(std::map<std::string, std::string> h)
     {
         request.headers = std::move(h);
         return *this;
     }
+
     WebClient& withBody(std::string b)
     {
         request.body = std::move(b);
         return *this;
     }
+
     WebClient& withJsonBody(const nlohmann::json& b)
     {
         request.body = b.dump();
         return *this;
     }
+
     template <typename TypeBody>
     WebClient& withBody(const TypeBody& b)
     {
@@ -213,11 +239,13 @@ struct WebClient
         request.body = j.dump();
         return *this;
     }
+
     WebClient& withVersion(int v)
     {
         request.version = v;
         return *this;
     }
+
     WebClient& withUrl(boost::urls::url_view url)
     {
         if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
@@ -238,37 +266,6 @@ struct WebClient
         return *this;
     }
 
-    AwaitableResult<boost::system::error_code> tryConnect()
-    {
-        if (isConnected)
-        {
-            co_return boost::system::error_code{};
-        }
-        boost::system::error_code ec{};
-        for (int i = 0; i < retryPolicy.maxTries; i++)
-        {
-            std::string target;
-            if (std::is_same_v<Stream, beast::tcp_stream>)
-            {
-                auto& tcpData = std::get<TcpData>(data);
-                target = tcpData.host;
-                ec = co_await client.connect(tcpData.host, tcpData.port);
-            }
-            else if (std::is_same_v<Stream, unix_domain::socket>)
-            {
-                auto& unixData = std::get<UnixData>(data);
-                target = unixData.path;
-                ec = co_await client.connect(unixData.path, "");
-            }
-            if (!ec)
-            {
-                isConnected = true;
-                co_return ec;
-            }
-            LOG_INFO("Retrying {} connection to {} ", i + 1, target);
-        }
-        co_return ec;
-    }
     template <typename... Ret>
     AwaitableResult<Ret...> returnFailed(boost::system::error_code ec)
     {
@@ -282,6 +279,7 @@ struct WebClient
             co_return co_await orElseHandler(ec);
         }
     }
+
     template <typename... Ret>
     AwaitableResult<Ret...> returnSuccess(boost::system::error_code ec,
                                           Response response)
@@ -296,8 +294,8 @@ struct WebClient
             co_return co_await thenHandler(std::move(response));
         }
     }
+
     // Build the Beast Request from the current WebRequest state.
-    // Extracted so both execute() and executeAsStream() share the same logic.
     Request buildRequest() const
     {
         std::string params;
@@ -327,43 +325,96 @@ struct WebClient
         return req;
     }
 
+    std::pair<std::string, std::string> getEndpoint() const
+    {
+        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
+        {
+            const auto& tcpData = std::get<TcpData>(data);
+            return {tcpData.host, tcpData.port};
+        }
+        else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
+        {
+            const auto& unixData = std::get<UnixData>(data);
+            return {unixData.path, ""};
+        }
+    }
+
+    /**
+     * @brief Executes the request by leasing a connection from the
+     * ConnectionPool. On completion, if the connection is healthy and
+     * keep-alive is active, the lease automatically returns the connection to
+     * the pool for reuse.
+     */
     template <typename... Ret>
     AwaitableResult<boost::system::error_code, Ret...> execute()
     {
-        auto [ec] = co_await tryConnect();
-        if (ec)
-        {
-            co_return co_await returnFailed<boost::system::error_code, Ret...>(
-                ec);
-        }
+        auto [hostOrPath, port] = getEndpoint();
         Request req = buildRequest();
-        ec = co_await client.send_request(req);
-        if (ec)
+
+        boost::system::error_code lastEc{};
+        int maxAttempts = std::max(1, retryPolicy.maxTries);
+
+        for (int attempt = 0; attempt < maxAttempts; ++attempt)
         {
-            co_return co_await returnFailed<boost::system::error_code, Ret...>(
-                ec);
-        }
-        auto [ec1, response] = co_await client.receive_response();
-        if (!ec1)
-        {
+            auto [acqEc, lease] = co_await pool_->acquire(hostOrPath, port);
+            if (acqEc)
+            {
+                lastEc = acqEc;
+                LOG_INFO("Retrying ({}/{}) connection to {}", attempt + 1,
+                         maxAttempts, hostOrPath);
+                continue;
+            }
+
+            boost::system::error_code sendEc =
+                co_await lease.get().send_request(req);
+            if (sendEc)
+            {
+                // Socket closed or failed, mark lease invalid so it is dropped
+                lease.markInvalid();
+                lastEc = sendEc;
+                LOG_INFO("Send failed, retrying ({}/{}) to {}", attempt + 1,
+                         maxAttempts, hostOrPath);
+                continue;
+            }
+
+            auto [recvEc, response] = co_await lease.get().receive_response();
+            if (recvEc)
+            {
+                lease.markInvalid();
+                lastEc = recvEc;
+                LOG_INFO("Receive failed, retrying ({}/{}) to {}", attempt + 1,
+                         maxAttempts, hostOrPath);
+                continue;
+            }
+
+            // Check if server or request asked to close the connection
+            if (!response.keep_alive() || !request.keepAlive)
+            {
+                lease.markInvalid();
+            }
+
             co_return co_await returnSuccess<boost::system::error_code, Ret...>(
-                ec1, std::move(response));
+                recvEc, std::move(response));
         }
-        co_return co_await returnFailed<boost::system::error_code, Ret...>(ec1);
+
+        co_return co_await returnFailed<boost::system::error_code, Ret...>(
+            lastEc);
     }
 
-    // Open a persistent SSE connection and return a shared SseStream.
-    // The caller co_await's stream->next() in a loop to receive frames.
-    // The producer coroutine is spawned detached; it exits when the socket
-    // closes or the SseStream is destroyed (timer cancelled on destruction).
+    // Open an SSE connection by acquiring a connection and holding it for
+    // streaming.
     net::awaitable<
         std::pair<boost::system::error_code, std::shared_ptr<SseStream>>>
         executeAsStream()
     {
-        // 1. Connect
-        auto [ec] = co_await tryConnect();
-        if (ec)
-            co_return std::make_pair(ec, nullptr);
+        auto [hostOrPath, port] = getEndpoint();
+
+        // 1. Acquire connection from pool
+        auto [acqEc, lease] = co_await pool_->acquire(hostOrPath, port);
+        if (acqEc)
+        {
+            co_return std::make_pair(acqEc, nullptr);
+        }
 
         // 2. Build and send request with SSE headers
         Request req = buildRequest();
@@ -371,35 +422,46 @@ struct WebClient
         req.set(http::field::cache_control, "no-cache");
         req.keep_alive(true);
 
-        ec = co_await client.send_request(req);
+        boost::system::error_code ec = co_await lease.get().send_request(req);
         if (ec)
+        {
+            lease.markInvalid();
             co_return std::make_pair(ec, nullptr);
+        }
 
-        // 3. Read and parse the HTTP response header properly via Beast.
-        auto [hec, statusCode] = co_await client.readResponseHeader();
+        // 3. Read and parse the HTTP response header properly via Beast
+        auto [hec, statusCode] = co_await lease.get().readResponseHeader();
         if (hec)
+        {
+            lease.markInvalid();
             co_return std::make_pair(hec, nullptr);
+        }
 
-        // 4. Check HTTP status — abort cleanly on anything other than 2xx.
+        // 4. Check HTTP status — abort cleanly on anything other than 2xx
         LOG_INFO("SSE response status: {}", statusCode);
         if (statusCode < 200 || statusCode >= 300)
         {
+            lease.markInvalid();
             LOG_ERROR("SSE request rejected: HTTP {}", statusCode);
             co_return std::make_pair(
                 make_error_code(boost::system::errc::connection_refused),
                 nullptr);
         }
 
-        // 5. Create the mailbox and spawn the frame producer
+        // 5. Transfer ownership of client for the long-lived streaming producer
+        auto client = lease.releaseClient();
         auto stream =
             std::make_shared<SseStream>(co_await net::this_coro::executor);
         std::string delim = request.frameDelimiter;
 
-        net::co_spawn(co_await net::this_coro::executor,
-                      frameProducer(stream, std::move(delim)), net::detached);
+        net::co_spawn(
+            co_await net::this_coro::executor,
+            frameProducer(std::move(client), stream, std::move(delim)),
+            net::detached);
 
         co_return std::make_pair(boost::system::error_code{}, stream);
     }
+
     template <typename RetType>
     AwaitableResult<boost::system::error_code, RetType> executeAndReturnAs()
     {
@@ -436,38 +498,61 @@ struct WebClient
             co_return std::make_tuple(ec, RetType{});
         }
     }
+
     WebClient& then(WebClientThenFunction auto handler)
     {
         thenHandler = std::move(handler);
         return *this;
     }
+
     WebClient& orElse(WebClientOrElseFunction auto handler)
     {
         orElseHandler = std::move(handler);
         return *this;
-    };
+    }
+
+    std::shared_ptr<ConnectionPool<Stream>> getPool() const
+    {
+        return pool_;
+    }
 
   private:
-    // Infinite read loop — runs as a detached coroutine.
-    // Reads one frame per iteration and posts it to the SseStream mailbox.
-    // Exits on EOF (clean server close) or any transport error, posting an
-    // SseFrame with ec set so the consumer can detect termination.
-    net::awaitable<void> frameProducer(std::shared_ptr<SseStream> stream,
-                                       std::string delim)
+    void initDefaults()
+    {
+        if constexpr (std::is_same_v<Stream, beast::tcp_stream>)
+        {
+            data = TcpData{};
+        }
+        else if constexpr (std::is_same_v<Stream, unix_domain::socket>)
+        {
+            data = UnixData{};
+        }
+        thenHandler = [](Response response)
+            -> AwaitableResult<boost::system::error_code> {
+            LOG_INFO("Response: {}", response.body());
+            co_return boost::system::error_code{};
+        };
+        orElseHandler = [](boost::system::error_code ec)
+            -> AwaitableResult<boost::system::error_code> { co_return ec; };
+    }
+
+    // Infinite read loop for SSE — runs as a detached coroutine holding the
+    // client socket.
+    static net::awaitable<void> frameProducer(
+        std::unique_ptr<HttpClient<Stream>> client,
+        std::shared_ptr<SseStream> stream, std::string delim)
     {
         while (true)
         {
-            auto [rec, frame] = co_await client.readUntil(delim);
+            auto [rec, frame] = co_await client->readUntil(delim);
 
             if (rec == net::error::eof)
             {
-                // Clean server close — notify consumer then stop.
                 stream->post(SseFrame{rec, {}});
                 co_return;
             }
             if (rec)
             {
-                // Transport error — notify consumer then stop.
                 stream->post(SseFrame{rec, {}});
                 co_return;
             }
@@ -475,4 +560,5 @@ struct WebClient
         }
     }
 };
+
 } // namespace NSNAME

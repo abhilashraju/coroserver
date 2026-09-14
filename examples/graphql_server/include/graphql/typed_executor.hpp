@@ -4,6 +4,7 @@
 #include "graphql/parser.hpp"
 #include "graphql/typed_schema.hpp"
 #include "graphql/util.hpp"
+#include "logger.hpp"
 
 #include <boost/asio.hpp>
 #include <nlohmann/json.hpp>
@@ -693,20 +694,28 @@ class TypedExecutor :
                 {
                     continue;
                 }
+                const std::string memberId =
+                    member["@odata.id"].get<std::string>();
                 Result<nlohmann::json> itemResult =
-                    fresh ? co_await provider->getFresh(
-                                member["@odata.id"].get<std::string>())
-                          : co_await provider->get(
-                                member["@odata.id"].get<std::string>());
+                    fresh ? co_await provider->getFresh(memberId)
+                          : co_await provider->get(memberId);
                 if (!itemResult)
                 {
-                    co_return std::unexpected(itemResult.error());
+                    // A single member fetch failing (e.g. socket timeout on a
+                    // large sensor collection, or permission denied for one
+                    // resource) must not abort the entire list.  Log and skip
+                    // so the rest of the sensors are still returned.
+                    LOG_WARNING("Skipping member '{}': {}", memberId,
+                                itemResult.error());
+                    continue;
                 }
                 Result<nlohmann::json> projResult = co_await projectObject(
                     *itemResult, fieldSpec.returnType, selection.selections);
                 if (!projResult)
                 {
-                    co_return std::unexpected(projResult.error());
+                    LOG_WARNING("Skipping member '{}' (projection failed): {}",
+                                memberId, projResult.error());
+                    continue;
                 }
                 result.push_back(std::move(*projResult));
             }

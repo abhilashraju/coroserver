@@ -52,13 +52,13 @@ struct http_function
         return std::string();
     }
 };
-std::string to_string(std::string_view vw)
+[[gnu::weak]] inline std::string to_string(std::string_view vw)
 {
     return std::string(vw.data(), vw.length());
 }
 
 // Decode a URL-encoded string: %XX hex escapes and '+' → space.
-inline std::string url_decode(std::string_view s)
+[[gnu::weak]] inline std::string url_decode(std::string_view s)
 {
     std::string out;
     out.reserve(s.size());
@@ -96,7 +96,7 @@ inline std::string url_decode(std::string_view s)
     return out;
 }
 
-inline http_function parse_function(std::string_view target)
+[[gnu::weak]] inline http_function parse_function(std::string_view target)
 {
     auto index = target.find_last_of("/");
     if (index != std::string::npos)
@@ -122,9 +122,9 @@ inline http_function parse_function(std::string_view target)
     return http_function{to_string(target), http_function::parameters{}};
 }
 
-void extract_params_from_path(http_function& func,
-                              const std::string& handlerfuncname,
-                              const std::string& pathfuncname)
+[[gnu::weak]] inline void extract_params_from_path(
+    http_function& func, const std::string& handlerfuncname,
+    const std::string& pathfuncname)
 {
     auto segs1 = split(handlerfuncname, '/', 1);
     auto segs2 = split(pathfuncname, '/', 1);

@@ -161,12 +161,10 @@ net::awaitable<Response> handleProxyRequest(Request& req,
     try
     {
         // Prepare request to forward - use original request target
-        // Keep-alive set to false to avoid connection timeout issues
         RedfishClient::Request clientReq;
         clientReq.withMethod(req.method())
             .withTarget(std::string(req.target()))
-            .withBody(req.body())
-            .witKeepAlive(false); // Disable keep-alive due to server timeouts
+            .withBody(req.body());
 
         // Copy relevant headers from original request
         std::map<std::string, std::string> headers;

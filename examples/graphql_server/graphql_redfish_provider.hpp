@@ -34,8 +34,8 @@ class RedfishProvider
     virtual boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
         getFresh(const std::string& target) = 0;
 
-    virtual boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>>
-        get(const std::string& target) = 0;
+    virtual boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>> get(
+        const std::string& target) = 0;
 };
 
 class HttpRedfishProvider : public RedfishProvider
@@ -47,14 +47,26 @@ class HttpRedfishProvider : public RedfishProvider
     boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>> get(
         const std::string& target) override;
 
-    // getFresh bypasses the cache — used by subscriptions to get live data
+    // getFresh bypasses the cache — used by subscriptions to get live data.
+    // Each call constructs its own RedfishClient on the coroutine frame so
+    // concurrent subscription loops never share a TCP connection.
     boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>> getFresh(
         const std::string& target) override;
 
   private:
+    // Build a fully configured RedfishClient bound to the shared token.
+    // The returned client lives on the caller's coroutine frame and is never
+    // shared with any other concurrent coroutine.
+    RedfishClient makeClient();
+
     boost::asio::io_context& io;
     boost::asio::ssl::context sslContext;
-    RedfishClient client;
+    RedfishProviderConfig config;
+    // Auth token shared across clients so a single token refresh is visible
+    // to all subsequent callers without re-authenticating.
+    std::string sharedToken;
+    // Sequential cached-read client (get() is never called concurrently).
+    RedfishClient queryClient;
     std::unordered_map<std::string, nlohmann::json> cache;
 };
 
