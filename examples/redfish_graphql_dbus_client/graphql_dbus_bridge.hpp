@@ -26,7 +26,7 @@ using namespace NSNAME;
 // ---------------------------------------------------------------------------
 
 /// Username + password used to obtain a Redfish session token.
-/// On startup the bridge calls RedfishClient::getToken() which POSTs to
+/// On startup the bridge calls RedfishClient::refreshToken() which POSTs to
 /// /redfish/v1/SessionService/Sessions and returns the X-Auth-Token.
 /// All SSE streams then carry that token as an X-Auth-Token header.
 struct PasswordAuth
@@ -105,7 +105,7 @@ inline std::expected<BridgeConfig, std::string> loadBridgeConfig(
     //   "auth": { "type": "password", "username": "admin",
     //             "password": "s3cr3t" }
     //
-    //     → Calls RedfishClient::getToken() at startup.  All SSE streams carry
+    //     → Calls RedfishClient::refreshToken() at startup.  All SSE streams carry
     //       the returned X-Auth-Token header.  Token is auto-refreshed on 401.
     //
     //   "auth": { "type": "mtls", "cert_file": "/path/to/client.crt",
@@ -636,7 +636,7 @@ class GraphqlDbusBridge
     }
 
     // Spawn the bridge as a detached coroutine.
-    // For PasswordAuth: calls RedfishClient::getToken() first, then starts all
+    // For PasswordAuth: calls RedfishClient::refreshToken() first, then starts all
     // SSE streams with the obtained X-Auth-Token.
     // For MtlsAuth / no-auth: starts SSE streams immediately.
     void start()
@@ -715,7 +715,7 @@ class GraphqlDbusBridge
                 .withUserName(pa->username)
                 .withPassword(pa->password);
 
-            auto [ec, token] = co_await rc.getToken();
+            auto [ec, token] = co_await rc.refreshToken();
             if (ec)
             {
                 LOG_ERROR("Bridge: login failed for user '{}' — {}",

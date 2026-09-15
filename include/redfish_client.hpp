@@ -52,6 +52,11 @@ struct RedfishClient
     std::string port{"443"};
     std::string protocol{"https"};
     std::shared_ptr<ConnectionPool<beast::tcp_stream>> pool_;
+    // Heap-allocated so its address stays stable if RedfishClient is moved
+    // while coroutines are suspended waiting on it.
+    // Non-null while a token fetch is in progress; cancelled (and reset) by
+    // the first fetcher when done, which wakes all waiting coroutines.
+    std::shared_ptr<net::steady_timer> tokenFetchInProgress;
 
     std::string baseUrl() const
     {
@@ -97,8 +102,29 @@ struct RedfishClient
         return *this;
     }
 
-    AwaitableResult<boost::system::error_code, std::string> getToken()
+    // Fetches a fresh token from SessionService.  Only one concurrent fetch is
+    // allowed; subsequent 401 handlers wait on tokenFetchInProgress until the
+    // first fetch completes, then reuse the updated token — no second POST.
+    AwaitableResult<boost::system::error_code, std::string> refreshToken()
     {
+        auto exec = co_await net::this_coro::executor;
+
+        // If another coroutine is already fetching, wait for it to finish and
+        // reuse whatever token it wrote — no second POST needed.
+        if (tokenFetchInProgress)
+        {
+            boost::system::error_code waitEc;
+            co_await tokenFetchInProgress->async_wait(
+                net::redirect_error(net::use_awaitable, waitEc));
+            // operation_aborted means the fetcher cancelled the timer (success).
+            co_return std::make_tuple(boost::system::error_code{}, token);
+        }
+
+        // First caller: claim the fetch slot.
+        tokenFetchInProgress = std::make_shared<net::steady_timer>(exec);
+        tokenFetchInProgress->expires_at(
+            std::chrono::steady_clock::time_point::max());
+
         // Token fetch uses a short-lived connection — no need to keep-alive.
         WebClient<beast::tcp_stream> webClient(ioc, ctx);
         webClient.withHost(host)
@@ -110,8 +136,14 @@ struct RedfishClient
                        password + "\"}"));
 
         auto [ec, res] = co_await webClient.execute<Response>();
+
         if (ec || res.result() != boost::beast::http::status::created)
         {
+            // Wake waiters before returning so they don't block forever.
+            // They will re-enter refreshToken(), find no fetch in progress,
+            // and attempt their own fetch.
+            tokenFetchInProgress->cancel();
+            tokenFetchInProgress.reset();
             LOG_ERROR("Failed to get token: {} for user: {}",
                       ec ? ec.message() : http_error_to_string.at(res.result()),
                       userName);
@@ -120,8 +152,16 @@ struct RedfishClient
                     boost::system::errc::permission_denied),
                 std::string{});
         }
-        std::string newToken = res.base().at("X-Auth-Token");
-        co_return std::make_tuple(boost::system::error_code{}, newToken);
+
+        // Write the new token into the member BEFORE waking waiters so every
+        // waiter that reads token immediately after cancel() sees the fresh value.
+        token = res.base().at("X-Auth-Token");
+
+        // Release the slot and wake all waiters.
+        tokenFetchInProgress->cancel();
+        tokenFetchInProgress.reset();
+
+        co_return std::make_tuple(boost::system::error_code{}, token);
     }
 
     AwaitableResult<Response> execute(const Request& req)
@@ -152,7 +192,7 @@ struct RedfishClient
                           http_error_to_string.at(res.result()), req.target);
                 if (res.result() == boost::beast::http::status::unauthorized)
                 {
-                    auto [tokenEc, newToken] = co_await getToken();
+                    auto [tokenEc, newToken] = co_await refreshToken();
                     if (tokenEc)
                     {
                         LOG_ERROR("Failed to get token: {}", tokenEc.message());

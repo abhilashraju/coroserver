@@ -9,7 +9,7 @@ net::awaitable<void> getAll(net::awaitable<Response> await1,
     LOG_INFO("getAll: entered");
     LOG_INFO("getAll: awaiting tuple when_all");
     auto [res1, res2] = co_await when_all(std::move(await1), std::move(await2));
-    LOG_INFO("getAll: tuple when_all completed");
+    LOG_INFO("getAll: tuple when_all completed \n {} \n", res1.body());
     LOG_INFO("getAll: network requests completed");
 }
 net::awaitable<void> getAllResults(auto tasks)

@@ -48,25 +48,20 @@ class HttpRedfishProvider : public RedfishProvider
         const std::string& target) override;
 
     // getFresh bypasses the cache — used by subscriptions to get live data.
-    // Each call constructs its own RedfishClient on the coroutine frame so
-    // concurrent subscription loops never share a TCP connection.
+    // All calls share the provider-owned connection pool so keep-alive
+    // connections are reused across both query and subscription requests.
     boost::asio::awaitable<NSNAME::graphql::Result<nlohmann::json>> getFresh(
         const std::string& target) override;
 
   private:
-    // Build a fully configured RedfishClient bound to the shared token.
-    // The returned client lives on the caller's coroutine frame and is never
-    // shared with any other concurrent coroutine.
-    RedfishClient makeClient();
-
-    boost::asio::io_context& io;
     boost::asio::ssl::context sslContext;
     RedfishProviderConfig config;
-    // Auth token shared across clients so a single token refresh is visible
-    // to all subsequent callers without re-authenticating.
-    std::string sharedToken;
-    // Sequential cached-read client (get() is never called concurrently).
-    RedfishClient queryClient;
+    // Single connection pool shared by all requests (get and getFresh).
+    // Connections are kept alive and reused up to maxConnectionsPerHost.
+    std::shared_ptr<ConnectionPool<beast::tcp_stream>> pool;
+    // client holds credentials and token; pool_ inside it points to pool
+    // above so every WebClient constructed from it shares the same connections.
+    RedfishClient client;
     std::unordered_map<std::string, nlohmann::json> cache;
 };
 

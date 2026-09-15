@@ -24,13 +24,16 @@ class task_barrier
         timer_->expires_at(std::chrono::steady_clock::time_point::max());
     }
 
-    // Get completion handler for co_spawn
+    // Get completion handler for co_spawn.
+    // Captures remaining_ by pointer and the timer by shared_ptr so the
+    // handler stays valid even if the when_all coroutine frame is torn down
+    // before all spawned tasks complete (e.g. on cancellation).
     auto completion_handler()
     {
-        return [this](std::exception_ptr) {
-            if (--remaining_ == 0)
+        return [remaining = &remaining_, timer = timer_](std::exception_ptr) {
+            if (--(*remaining) == 0)
             {
-                timer_->cancel();
+                timer->cancel();
             }
         };
     }
@@ -210,24 +213,36 @@ auto when_all(std::vector<net::awaitable<T>> awaitables) -> net::awaitable<
 
     LOG_DEBUG("when_all: Launching {} vector tasks concurrently", num_tasks);
 
-    std::vector<std::exception_ptr> errors(num_tasks);
-    detail::task_barrier barrier(exec, num_tasks);
-
-    // Storage for non-void results
-    std::conditional_t<std::is_void_v<T>, std::monostate,
-                       std::vector<std::optional<T>>>
-        values;
-    if constexpr (!std::is_void_v<T>)
+    // Heap-allocate shared state so it outlives the when_all coroutine frame
+    // if the awaitable is cancelled or destroyed while spawned tasks are still
+    // in-flight.  A raw reference into the coroutine frame would become
+    // dangling the moment the frame is torn down.
+    struct SharedState
     {
-        values.resize(num_tasks);
-    }
+        explicit SharedState(const net::any_io_executor& ex, size_t n) :
+            errors(n), barrier(ex, n)
+        {
+            if constexpr (!std::is_void_v<T>)
+            {
+                values.resize(n);
+            }
+        }
+
+        std::vector<std::exception_ptr> errors;
+        detail::task_barrier barrier;
+        std::conditional_t<std::is_void_v<T>, std::monostate,
+                           std::vector<std::optional<T>>>
+            values;
+    };
+
+    auto state = std::make_shared<SharedState>(exec, num_tasks);
 
     // Launch all tasks concurrently
     for (size_t i = 0; i < num_tasks; ++i)
     {
         net::co_spawn(
             exec,
-            [&values, &errors, i, task = std::move(awaitables[i])]() mutable
+            [state, i, task = std::move(awaitables[i])]() mutable
                 -> net::awaitable<void> {
                 co_await net::post(co_await net::this_coro::executor,
                                    net::use_awaitable);
@@ -239,27 +254,28 @@ auto when_all(std::vector<net::awaitable<T>> awaitables) -> net::awaitable<
                     }
                     else
                     {
-                        values[i] = co_await std::move(task);
+                        state->values[i] = co_await std::move(task);
                     }
                 }
                 catch (...)
                 {
-                    errors[i] = std::current_exception();
+                    state->errors[i] = std::current_exception();
                 }
             },
-            barrier.completion_handler());
+            state->barrier.completion_handler());
     }
 
     // Wait for all tasks to complete
-    co_await barrier.wait();
+    co_await state->barrier.wait();
 
-    detail::check_and_rethrow_errors(errors, "when_all: Dynamic task array");
+    detail::check_and_rethrow_errors(state->errors,
+                                     "when_all: Dynamic task array");
 
     if constexpr (!std::is_void_v<T>)
     {
         std::vector<T> result;
         result.reserve(num_tasks);
-        for (auto& value : values)
+        for (auto& value : state->values)
         {
             result.push_back(std::move(*value));
         }

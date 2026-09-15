@@ -83,7 +83,7 @@ net::awaitable<Response> handleConfigEndpoint(Request& req,
             .withPassword(pass);
 
         // Test authentication by getting a token
-        auto [tokenEc, token] = co_await proxyState.client->getToken();
+        auto [tokenEc, token] = co_await proxyState.client->refreshToken();
         if (tokenEc)
         {
             res.result(http::status::unauthorized);

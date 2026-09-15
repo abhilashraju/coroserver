@@ -5,6 +5,7 @@
 #include "graphql/typed_schema.hpp"
 #include "graphql/util.hpp"
 #include "logger.hpp"
+#include "when_all.hpp"
 
 #include <boost/asio.hpp>
 #include <nlohmann/json.hpp>
@@ -12,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -75,33 +77,43 @@ class TimerTrigger : public SubscriptionTrigger
     std::chrono::steady_clock::duration interval_;
 };
 
-// Event-based trigger: sleeps indefinitely; fire() wakes the loop immediately.
+// EventTrigger wakes the subscription loop when a D-Bus signal fires, but
+// debounces rapid bursts of signals (e.g. many sensors updating at once)
+// into a single tick by resetting a short deadline on each fire() call.
+// Only after the debounce window passes with no further fire() calls does
+// wait() return — preventing a flood of back-to-back subscription ticks.
 class EventTrigger : public SubscriptionTrigger
 {
   public:
-    explicit EventTrigger(boost::asio::any_io_executor exec) :
-        timer_(std::move(exec))
+    // debounceMs: how long to wait after the last fire() before waking the
+    // loop.  500 ms coalesces typical sensor burst updates into one tick.
+    explicit EventTrigger(boost::asio::any_io_executor exec,
+                          std::chrono::milliseconds debounceMs =
+                              std::chrono::milliseconds{500}) :
+        timer_(std::move(exec)), debounceMs_(debounceMs)
     {
         timer_.expires_at(std::chrono::steady_clock::time_point::max());
     }
 
     boost::asio::awaitable<bool> wait() override
     {
-        // Re-arm to max before awaiting so fire() can cancel it again next
-        // time.
+        // Re-arm to max before awaiting so fire() can set the debounce
+        // deadline on the next event.
         timer_.expires_at(std::chrono::steady_clock::time_point::max());
         boost::system::error_code ec;
         co_await timer_.async_wait(
             boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-        // operation_aborted means fire() was called — that is the success path.
-        // Any other error (e.g. from cancel() on cleanup) means stop.
-        co_return (ec == boost::asio::error::operation_aborted);
+        // Timer expired naturally → debounce window elapsed, proceed.
+        // operation_aborted here means cancel() was called (shutdown), stop.
+        co_return (ec != boost::asio::error::operation_aborted);
     }
 
-    // Wake the loop immediately (called by DbusEventMonitor).
-    void fire()
+    // Called by notifyFieldsChanged on every matching D-Bus signal.
+    // Resets the debounce deadline so the loop only wakes once the burst
+    // of signals has settled for debounceMs_.
+    void fire() override
     {
-        timer_.cancel();
+        timer_.expires_after(debounceMs_);
     }
 
     void cancel() override
@@ -122,6 +134,7 @@ class EventTrigger : public SubscriptionTrigger
 
   private:
     boost::asio::steady_timer timer_;
+    std::chrono::milliseconds debounceMs_;
 };
 
 template <typename Provider>
@@ -652,6 +665,35 @@ class TypedExecutor :
         return result;
     }
 
+    // Fetch one member URL and project it against the given type/selections.
+    // Declared as a static free coroutine (not a lambda) so all arguments are
+    // unambiguously copied into the coroutine frame by the compiler.
+    // Immediately-invoked lambda coroutines do not have this guarantee —
+    // the closure can be destroyed before the frame consumes it.
+    static boost::asio::awaitable<std::optional<nlohmann::json>>
+        fetchAndProject(std::shared_ptr<TypedExecutor> self,
+                        std::string memberId, std::string returnType,
+                        std::vector<FieldSelection> selections)
+    {
+        Result<nlohmann::json> itemResult =
+            co_await self->provider->getFresh(memberId);
+        if (!itemResult)
+        {
+            LOG_WARNING("Skipping member '{}': {}", memberId,
+                        itemResult.error());
+            co_return std::nullopt;
+        }
+        Result<nlohmann::json> projResult =
+            co_await self->projectObject(*itemResult, returnType, selections);
+        if (!projResult)
+        {
+            LOG_WARNING("Skipping member '{}' (projection failed): {}",
+                        memberId, projResult.error());
+            co_return std::nullopt;
+        }
+        co_return std::move(*projResult);
+    }
+
     // Generic resolution driven by FieldSpec::redfishPath.
     // Subclasses can call this when the field has a redfishPath set, or
     // override resolveRootField entirely and handle only their custom cases.
@@ -687,37 +729,57 @@ class TypedExecutor :
                     "'");
             }
 
-            nlohmann::json result = nlohmann::json::array();
+            // Collect the member IDs up front so we can launch all fetches
+            // concurrently via when_all.
+            std::vector<std::string> memberIds;
             for (const auto& member : payload["Members"])
             {
-                if (!member.contains("@odata.id"))
+                if (member.contains("@odata.id"))
                 {
-                    continue;
+                    memberIds.push_back(member["@odata.id"].get<std::string>());
                 }
-                const std::string memberId =
-                    member["@odata.id"].get<std::string>();
-                Result<nlohmann::json> itemResult =
-                    fresh ? co_await provider->getFresh(memberId)
-                          : co_await provider->get(memberId);
-                if (!itemResult)
+            }
+
+            // Fetch + project members in batches of kBatchSize so we run
+            // kBatchSize requests concurrently without flooding the upstream
+            // Redfish server with all 400 sensors at once.
+            using OptJson = std::optional<nlohmann::json>;
+            constexpr std::size_t kBatchSize = 3;
+
+            // Copy only the fields consumed inside the task bodies.
+            // shared_ptr self ensures the executor stays alive for the full
+            // duration of every spawned task regardless of the caller lifetime.
+            auto self = this->shared_from_this();
+            const std::string returnType = fieldSpec.returnType;
+            const std::vector<FieldSelection> selections = selection.selections;
+
+            nlohmann::json result = nlohmann::json::array();
+
+            for (std::size_t batchStart = 0; batchStart < memberIds.size();
+                 batchStart += kBatchSize)
+            {
+                const std::size_t batchEnd =
+                    std::min(batchStart + kBatchSize, memberIds.size());
+
+                std::vector<net::awaitable<OptJson>> tasks;
+                tasks.reserve(batchEnd - batchStart);
+
+                for (std::size_t i = batchStart; i < batchEnd; ++i)
                 {
-                    // A single member fetch failing (e.g. socket timeout on a
-                    // large sensor collection, or permission denied for one
-                    // resource) must not abort the entire list.  Log and skip
-                    // so the rest of the sensors are still returned.
-                    LOG_WARNING("Skipping member '{}': {}", memberId,
-                                itemResult.error());
-                    continue;
+                    tasks.push_back(fetchAndProject(self, memberIds[i],
+                                                    returnType, selections));
                 }
-                Result<nlohmann::json> projResult = co_await projectObject(
-                    *itemResult, fieldSpec.returnType, selection.selections);
-                if (!projResult)
+
+                std::vector<OptJson> outcomes =
+                    co_await when_all(std::move(tasks));
+
+                for (auto& outcome : outcomes)
                 {
-                    LOG_WARNING("Skipping member '{}' (projection failed): {}",
-                                memberId, projResult.error());
-                    continue;
+                    if (outcome)
+                    {
+                        result.push_back(std::move(*outcome));
+                    }
                 }
-                result.push_back(std::move(*projResult));
             }
             co_return result;
         }

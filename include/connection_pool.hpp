@@ -22,7 +22,7 @@ struct ConnectionPoolConfig
 {
     // Maximum active + idle connections per endpoint key (host:port or unix
     // path)
-    std::size_t maxConnectionsPerHost{20};
+    std::size_t maxConnectionsPerHost{5};
 
     // Idle connections older than this are closed and discarded instead of
     // reused

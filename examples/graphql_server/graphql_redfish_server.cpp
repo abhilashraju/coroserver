@@ -238,9 +238,12 @@ std::expected<void, std::string> run(int argc, const char* argv[])
                                            ? requestBody["variables"]
                                            : nlohmann::json::object();
 
-            nlohmann::json response =
-                co_await resolveExecutor(params["remoteIp"])
-                    ->execute(query, variables);
+            // Keep the shared_ptr alive for the entire co_await chain.
+            // Without this named local the temporary is destroyed at the
+            // first suspension point, leaving execute() running on a
+            // freed object (use-after-free → SIGSEGV).
+            auto exec = resolveExecutor(params["remoteIp"]);
+            nlohmann::json response = co_await exec->execute(query, variables);
             co_return make_success_response(response, http::status::ok,
                                             req.version());
         });
