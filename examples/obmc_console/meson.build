@@ -46,6 +46,15 @@ ibmi_console_client = executable('ibmi_console_client',
   install_dir: get_option('bindir')
 )
 
+# Dummy IBM i 5250 backend for ibmi_console_client development and testing.
+ibmi_console_emulator = executable('ibmi_console_emulator',
+  'ibmi_console_emulator.cpp',
+  include_directories: reactor_inc,
+  dependencies: [reactor_dep],
+  install: true,
+  install_dir: get_option('bindir')
+)
+
 # Install systemd service file
 systemd = dependency('systemd', required: false)
 if systemd.found()

@@ -91,6 +91,23 @@ struct ConsolePtyConfig
 };
 
 /**
+ * @brief In-process IBM i 5250 emulator configuration.
+ */
+struct ConsoleIbmiEmulatorConfig
+{
+    static constexpr const char* toString()
+    {
+        return "IBMI_EMULATOR";
+    }
+
+    template <typename ConsoleInstance>
+    auto handle(ConsoleInstance* instance) const
+    {
+        return instance->initIbmiEmulatorDevice();
+    }
+};
+
+/**
  * @brief SSH PTY-specific configuration (console config)
  */
 struct ConsoleSshPtyConfig
@@ -129,7 +146,7 @@ struct MuxConfig
  */
 using DeviceSpecificConfig =
     std::variant<ConsoleUartConfig, ConsoleVuartConfig, ConsolePtyConfig,
-                 ConsoleSshPtyConfig>;
+                 ConsoleIbmiEmulatorConfig, ConsoleSshPtyConfig>;
 
 /**
  * @brief Complete device configuration
@@ -294,6 +311,10 @@ struct ConsoleConfig
                 }
             }
             return pty;
+        }
+        else if (typeStr == "ibmi-emulator" || typeStr == "IBMI-EMULATOR")
+        {
+            return ConsoleIbmiEmulatorConfig{};
         }
         else if (typeStr == "ssh-pty" || typeStr == "SSH-PTY" ||
                  typeStr == "SSH_PTY")

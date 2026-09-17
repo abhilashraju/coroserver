@@ -18,6 +18,7 @@
 #include "completion_handler.hpp"
 #include "console_config.hpp"
 #include "console_dbus.hpp"
+#include "ibmi_emulator.hpp"
 #include "logger.hpp"
 #include "pty_device.hpp"
 #include "ssh_pty_device_libssh2.hpp"
@@ -30,6 +31,7 @@
 
 #include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/circular_buffer.hpp>
 #include <sdbusplus/asio/connection.hpp>
 
@@ -112,9 +114,11 @@ class ConsoleRouter
                   std::unique_ptr<UartDevice>& uart,
                   std::unique_ptr<PtyDevice>& pty,
                   std::unique_ptr<SshPtyDevice>& sshPty,
+                  std::unique_ptr<IbmiEmulator>& ibmiEmulator,
                   const std::string& name, std::stop_token stopToken) :
         io_context_(io_context), ringBuffer_(ringBuffer), uart_(uart),
-        pty_(pty), sshPty_(sshPty), consoleName_(name), stopToken_(stopToken)
+        pty_(pty), sshPty_(sshPty), ibmiEmulator_(ibmiEmulator),
+        consoleName_(name), stopToken_(stopToken)
     {}
 
     /**
@@ -262,6 +266,21 @@ class ConsoleRouter
                         },
                         boost::asio::detached);
                 }
+                else if (ibmiEmulator_)
+                {
+                    const std::vector<uint8_t> response =
+                        ibmiEmulator_->process(std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(data.data()),
+                            data.size()));
+                    std::vector<char> output(response.begin(), response.end());
+                    ringBuffer_.insert(ringBuffer_.end(), output.begin(),
+                                       output.end());
+                    broadcastToAll(output);
+                    if (ibmiEmulator_->isClosed())
+                    {
+                        disconnectAllClients();
+                    }
+                }
             }
         }
 
@@ -345,6 +364,7 @@ class ConsoleRouter
     std::unique_ptr<UartDevice>& uart_;
     std::unique_ptr<PtyDevice>& pty_;
     std::unique_ptr<SshPtyDevice>& sshPty_;
+    std::unique_ptr<IbmiEmulator>& ibmiEmulator_;
     std::string consoleName_;
     std::stop_token stopToken_;
 };
@@ -361,7 +381,7 @@ class ConsoleInstance
         io_context_(io_context), deviceConfig_(deviceConfig),
         acceptor_(io_context, deviceConfig.getSocketPath()),
         ringBuffer_(128 * 1024), // 128KB buffer
-        router_(io_context, ringBuffer_, uart_, pty_, sshPty_,
+        router_(io_context, ringBuffer_, uart_, pty_, sshPty_, ibmiEmulator_,
                 deviceConfig.getName(), stopSource_.get_token()),
         server_(io_context, acceptor_, router_), bus_(sharedBus),
         stopToken_(stopSource_.get_token())
@@ -524,6 +544,28 @@ class ConsoleInstance
             });
 
         LOG_INFO("[{}] PTY handler stopped", deviceConfig_.getName());
+    }
+
+    /**
+     * @brief Initialize the in-process IBM i emulator backend.
+     */
+    net::awaitable<void> initIbmiEmulatorDevice()
+    {
+        ibmiEmulator_ = std::make_unique<IbmiEmulator>();
+        const std::vector<uint8_t> initialDisplay =
+            ibmiEmulator_->initialDisplay();
+        std::vector<char> output(initialDisplay.begin(), initialDisplay.end());
+        ringBuffer_.insert(ringBuffer_.end(), output.begin(), output.end());
+        router_.broadcastToAll(output);
+        LOG_INFO("[{}] IBM i emulator initialized", deviceConfig_.getName());
+
+        net::steady_timer timer(io_context_);
+        timer.expires_at((net::steady_timer::time_point::max)());
+        std::stop_callback onStop(stopToken_, [&timer]() { timer.cancel(); });
+        boost::system::error_code ec;
+        co_await timer.async_wait(
+            boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+        co_return;
     }
 
     /**
@@ -825,6 +867,7 @@ class ConsoleInstance
     std::unique_ptr<UartDevice> uart_;
     std::unique_ptr<PtyDevice> pty_;
     std::unique_ptr<SshPtyDevice> sshPty_;
+    std::unique_ptr<IbmiEmulator> ibmiEmulator_;
     ConsoleRouter router_;
     TcpServer<UnixStreamTypePlain, ConsoleRouter> server_;
     std::shared_ptr<sdbusplus::asio::connection> bus_;

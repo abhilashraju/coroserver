@@ -45,6 +45,7 @@ FILES:${PN}-console = " \
     ${bindir}/console_server \
     ${bindir}/console_client \
     ${bindir}/ibmi_console_client \
+    ${bindir}/ibmi_console_emulator \
     ${bindir}/obmc-console-start.sh \
     ${systemd_system_unitdir}/console_server.service \
     ${systemd_system_unitdir}/obmc-console-ssh@2202.service \

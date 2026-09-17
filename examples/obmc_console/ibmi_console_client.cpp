@@ -24,8 +24,8 @@
 #include "command_line_parser.hpp"
 #include "completion_handler.hpp"
 #include "logger.hpp"
-#include "screen_renderer.hpp"
 #include "screen5250.hpp"
+#include "screen_renderer.hpp"
 #include "stream5250_parser.hpp"
 #include "unix_client.hpp"
 #include "vslip_framer.hpp"
@@ -81,8 +81,8 @@ class TerminalManager
         if (!saved_)
             return false;
         struct termios raw = orig_;
-        ::cfmakeraw(&raw);              // true raw: no echo, no signals, no canonical
-        raw.c_cc[VMIN]  = 1;
+        ::cfmakeraw(&raw); // true raw: no echo, no signals, no canonical
+        raw.c_cc[VMIN] = 1;
         raw.c_cc[VTIME] = 0;
         if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
         {
@@ -112,7 +112,8 @@ class TerminalManager
 // AID key encoder
 //
 // Encodes a keystroke as a minimal 5250 input record:
-//   [AID byte] [cursor row high] [cursor row low] [cursor col high] [cursor col low]
+//   [AID byte] [cursor row high] [cursor row low] [cursor col high] [cursor col
+//   low]
 //
 // For Enter and function keys the host needs the AID + current cursor position.
 // The record is then VSLIP-framed before sending.
@@ -120,22 +121,22 @@ class TerminalManager
 namespace Aid
 {
 constexpr uint8_t ENTER = 0xF1;
-constexpr uint8_t F1    = 0x31;
-constexpr uint8_t F2    = 0x32;
-constexpr uint8_t F3    = 0x33;
-constexpr uint8_t F4    = 0x34;
-constexpr uint8_t F5    = 0x35;
-constexpr uint8_t F6    = 0x36;
-constexpr uint8_t F7    = 0x37;
-constexpr uint8_t F8    = 0x38;
-constexpr uint8_t F9    = 0x39;
-constexpr uint8_t F10   = 0x3A;
-constexpr uint8_t F11   = 0x3B;
-constexpr uint8_t F12   = 0x3C;
-constexpr uint8_t F13   = 0xB1;
-constexpr uint8_t F24   = 0xBC;
-constexpr uint8_t PA1   = 0x6C; // Page up
-constexpr uint8_t PA2   = 0x6E; // Page down
+constexpr uint8_t F1 = 0x31;
+constexpr uint8_t F2 = 0x32;
+constexpr uint8_t F3 = 0x33;
+constexpr uint8_t F4 = 0x34;
+constexpr uint8_t F5 = 0x35;
+constexpr uint8_t F6 = 0x36;
+constexpr uint8_t F7 = 0x37;
+constexpr uint8_t F8 = 0x38;
+constexpr uint8_t F9 = 0x39;
+constexpr uint8_t F10 = 0x3A;
+constexpr uint8_t F11 = 0x3B;
+constexpr uint8_t F12 = 0x3C;
+constexpr uint8_t F13 = 0xB1;
+constexpr uint8_t F24 = 0xBC;
+constexpr uint8_t PA1 = 0x6C; // Page up
+constexpr uint8_t PA2 = 0x6E; // Page down
 constexpr uint8_t CLEAR = 0xBD;
 } // namespace Aid
 
@@ -154,9 +155,8 @@ static std::vector<uint8_t> makeAidRecord(uint8_t aid, int row, int col)
 class IbmiConsoleClient
 {
   public:
-    IbmiConsoleClient(net::any_io_executor exec,
-                      const std::string& socketPath,
-                      std::stop_token    stopToken) :
+    IbmiConsoleClient(net::any_io_executor exec, const std::string& socketPath,
+                      std::stop_token stopToken) :
         exec_(exec), socketPath_(socketPath), stopToken_(stopToken),
         client_(exec), stdinStream_(exec)
     {
@@ -236,8 +236,7 @@ class IbmiConsoleClient
 
             while (!stopToken_.stop_requested())
             {
-                auto [ec, n] = co_await client_.read(
-                    boost::asio::buffer(buf));
+                auto [ec, n] = co_await client_.read(boost::asio::buffer(buf));
 
                 if (ec)
                 {
@@ -252,7 +251,8 @@ class IbmiConsoleClient
                 if (n > 0)
                 {
                     std::vector<std::vector<uint8_t>> frames;
-                    framer_.feed(std::span<const uint8_t>(buf.data(), n), frames);
+                    framer_.feed(std::span<const uint8_t>(buf.data(), n),
+                                 frames);
 
                     for (auto& frame : frames)
                     {
@@ -264,6 +264,7 @@ class IbmiConsoleClient
                         ScreenRenderer::render(screen_);
                         ScreenRenderer::renderStatusLine(
                             "IBMi 5250  [Enter~. to quit]");
+                        ScreenRenderer::positionCursor(screen_);
                     }
                 }
             }
@@ -288,7 +289,12 @@ class IbmiConsoleClient
             std::array<uint8_t, 32> buf{};
 
             // Escape sequence state: newline → tilde → dot = disconnect
-            enum class EscState { Normal, AfterNewline, AfterTilde };
+            enum class EscState
+            {
+                Normal,
+                AfterNewline,
+                AfterTilde
+            };
             EscState escState = EscState::Normal;
 
             while (!stopToken_.stop_requested())
@@ -296,8 +302,8 @@ class IbmiConsoleClient
                 boost::system::error_code ec;
                 size_t n = co_await stdinStream_.async_read_some(
                     boost::asio::buffer(buf),
-                    boost::asio::redirect_error(
-                        boost::asio::use_awaitable, ec));
+                    boost::asio::redirect_error(boost::asio::use_awaitable,
+                                                ec));
 
                 if (ec)
                 {
@@ -320,8 +326,15 @@ class IbmiConsoleClient
                                 escState = EscState::AfterNewline;
                             break;
                         case EscState::AfterNewline:
-                            if (c == '~')      { escState = EscState::AfterTilde; continue; }
-                            else               { escState = EscState::Normal; }
+                            if (c == '~')
+                            {
+                                escState = EscState::AfterTilde;
+                                continue;
+                            }
+                            else
+                            {
+                                escState = EscState::Normal;
+                            }
                             break;
                         case EscState::AfterTilde:
                             if (c == '.')
@@ -339,14 +352,14 @@ class IbmiConsoleClient
                     break;
 
                 // Map raw input to 5250 AID record or pass-through characters
-                std::vector<uint8_t> payload = mapInput(
-                    std::span<const uint8_t>(buf.data(), n));
+                std::vector<uint8_t> payload =
+                    mapInput(std::span<const uint8_t>(buf.data(), n));
 
                 if (!payload.empty())
                 {
                     auto frame = VSlipFramer::encode(payload);
-                    auto [wec, wb] = co_await client_.write(
-                        boost::asio::buffer(frame));
+                    auto [wec, wb] =
+                        co_await client_.write(boost::asio::buffer(frame));
                     if (wec)
                     {
                         LOG_ERROR("Socket write error: {}", wec.message());
@@ -381,41 +394,100 @@ class IbmiConsoleClient
         // Enter key
         if (raw.size() == 1 && (raw[0] == '\r' || raw[0] == '\n'))
         {
-            return makeAidRecord(Aid::ENTER,
-                                 screen_.inputRow, screen_.inputCol);
+            return makeAidRecord(Aid::ENTER, screen_.inputRow,
+                                 screen_.inputCol);
         }
 
-        // ANSI escape sequences for function keys: ESC [ <n> ~
-        // ESC [ 1 1 ~ = F1,  ESC [ 1 2 ~ = F2, …  ESC [ 2 4 ~ = F12
+        // Backspace / Delete.
+        if (raw.size() == 1 && (raw[0] == 0x08 || raw[0] == 0x7F))
+        {
+            return {0x15};
+        }
+
+        // ANSI cursor keys. The emulator treats these as local field
+        // navigation.
+        if (raw.size() == 3 && raw[0] == 0x1B && raw[1] == '[')
+        {
+            switch (raw[2])
+            {
+                case 'A':
+                    return {0x18};
+                case 'B':
+                    return {0x19};
+                case 'C':
+                    return {0x1A};
+                case 'D':
+                    return {0x1B};
+                default:
+                    return {};
+            }
+        }
+
+        // ANSI function-key sequences: ESC [ <number> ~.
         if (raw.size() >= 4 && raw[0] == 0x1B && raw[1] == '[')
         {
-            // Try to decode Fn key number
             int fnNum = 0;
             size_t i = 2;
             while (i < raw.size() && raw[i] >= '0' && raw[i] <= '9')
-                fnNum = fnNum * 10 + (raw[i++] - '0');
-
-            // Map function key number to AID byte (F1=11…F12=23 in xterm)
-            static const uint8_t fnAids[] = {
-                Aid::F1,  Aid::F2,  Aid::F3,  Aid::F4,
-                Aid::F5,  Aid::F6,  Aid::F7,  Aid::F8,
-                Aid::F9,  Aid::F10, Aid::F11, Aid::F12,
-            };
-            if (fnNum >= 11 && fnNum <= 23)
             {
-                int idx = fnNum - 11;
-                if (idx < static_cast<int>(std::size(fnAids)))
-                    return makeAidRecord(fnAids[idx],
-                                         screen_.inputRow, screen_.inputCol);
+                fnNum = fnNum * 10 + (raw[i++] - '0');
             }
 
-            // Page up / down
-            if (fnNum == 5) // xterm page-up
-                return makeAidRecord(Aid::PA1, screen_.inputRow, screen_.inputCol);
-            if (fnNum == 6) // xterm page-down
-                return makeAidRecord(Aid::PA2, screen_.inputRow, screen_.inputCol);
+            switch (fnNum)
+            {
+                case 5:
+                    return makeAidRecord(Aid::PA1, screen_.inputRow,
+                                         screen_.inputCol);
+                case 6:
+                    return makeAidRecord(Aid::PA2, screen_.inputRow,
+                                         screen_.inputCol);
+                case 11:
+                    return makeAidRecord(Aid::F1, screen_.inputRow,
+                                         screen_.inputCol);
+                case 12:
+                    return makeAidRecord(Aid::F2, screen_.inputRow,
+                                         screen_.inputCol);
+                case 13:
+                    return makeAidRecord(Aid::F3, screen_.inputRow,
+                                         screen_.inputCol);
+                case 14:
+                    return makeAidRecord(Aid::F4, screen_.inputRow,
+                                         screen_.inputCol);
+                case 15:
+                    return makeAidRecord(Aid::F5, screen_.inputRow,
+                                         screen_.inputCol);
+                case 17:
+                    return makeAidRecord(Aid::F6, screen_.inputRow,
+                                         screen_.inputCol);
+                case 18:
+                    return makeAidRecord(Aid::F7, screen_.inputRow,
+                                         screen_.inputCol);
+                case 19:
+                    return makeAidRecord(Aid::F8, screen_.inputRow,
+                                         screen_.inputCol);
+                case 20:
+                    return makeAidRecord(Aid::F9, screen_.inputRow,
+                                         screen_.inputCol);
+                case 21:
+                    return makeAidRecord(Aid::F10, screen_.inputRow,
+                                         screen_.inputCol);
+                case 23:
+                    return makeAidRecord(Aid::F11, screen_.inputRow,
+                                         screen_.inputCol);
+                case 24:
+                    return makeAidRecord(Aid::F12, screen_.inputRow,
+                                         screen_.inputCol);
+                default:
+                    return {};
+            }
+        }
 
-            return {}; // unhandled escape sequence — drop it
+        // SS3 sequences used by some terminals for F1 through F4.
+        if (raw.size() == 3 && raw[0] == 0x1B && raw[1] == 'O' &&
+            raw[2] >= 'P' && raw[2] <= 'S')
+        {
+            return makeAidRecord(static_cast<uint8_t>(Aid::F1 + raw[2] - 'P'),
+                                 screen_.inputRow, screen_.inputCol);
         }
 
         // Printable ASCII → convert to EBCDIC and send as character data
@@ -433,6 +505,11 @@ class IbmiConsoleClient
     /// Reverse lookup: ASCII → EBCDIC CP037 (covers printable range only).
     static uint8_t asciiToEbcdic(uint8_t ascii)
     {
+        if (ascii == ' ')
+        {
+            return 0x40;
+        }
+
         // Brute-force search of the forward table; called only on user keypress
         // so performance is not a concern.
         for (int i = 0; i < 256; ++i)
@@ -444,15 +521,15 @@ class IbmiConsoleClient
     }
 
     // -----------------------------------------------------------------------
-    net::any_io_executor   exec_;
-    std::string            socketPath_;
-    std::stop_token        stopToken_;
-    UnixClientPlain        client_;
+    net::any_io_executor exec_;
+    std::string socketPath_;
+    std::stop_token stopToken_;
+    UnixClientPlain client_;
     boost::asio::posix::stream_descriptor stdinStream_;
-    TerminalManager        termMgr_;
-    VSlipFramer            framer_;
-    Stream5250Parser       parser_;
-    Screen5250             screen_;
+    TerminalManager termMgr_;
+    VSlipFramer framer_;
+    Stream5250Parser parser_;
+    Screen5250 screen_;
 };
 
 // ---------------------------------------------------------------------------
@@ -460,10 +537,8 @@ class IbmiConsoleClient
 // ---------------------------------------------------------------------------
 auto makeCompletionHandler(net::io_context& ioContext)
 {
-    return reactor::makeCompletionHandler(
-        "Exception in ibmi_console_client", [&ioContext]() {
-            ioContext.stop();
-        });
+    return reactor::makeCompletionHandler("Exception in ibmi_console_client",
+                                          [&ioContext]() { ioContext.stop(); });
 }
 
 int main(int argc, const char* argv[])
@@ -484,14 +559,15 @@ int main(int argc, const char* argv[])
                 socketPath = arg1;
         }
 
-        std::signal(SIGINT,  signalHandler);
+        std::signal(SIGINT, signalHandler);
         std::signal(SIGTERM, signalHandler);
 
         net::io_context ioContext;
 
         auto stopToken = globalStopSource.get_token();
 
-        IbmiConsoleClient client(ioContext.get_executor(), socketPath, stopToken);
+        IbmiConsoleClient client(ioContext.get_executor(), socketPath,
+                                 stopToken);
 
         boost::asio::co_spawn(
             ioContext,
@@ -500,10 +576,9 @@ int main(int argc, const char* argv[])
 
         // Stop the io_context when stop is requested from signal handler
         boost::asio::signal_set signals(ioContext, SIGINT, SIGTERM);
-        signals.async_wait(
-            [&ioContext](const boost::system::error_code&, int) {
-                ioContext.stop();
-            });
+        signals.async_wait([&ioContext](const boost::system::error_code&, int) {
+            ioContext.stop();
+        });
 
         ioContext.run();
         return EXIT_SUCCESS;

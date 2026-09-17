@@ -19,9 +19,10 @@
 
 #include "screen5250.hpp"
 
+#include <unistd.h>
+
 #include <cstdio>
 #include <string>
-#include <unistd.h>
 
 namespace NSNAME
 {
@@ -38,11 +39,16 @@ class ScreenRenderer
         // Reserve: ~2000 chars + ~500 bytes of ANSI escape overhead
         out.reserve(3000);
 
-        // Clear screen and home cursor
-        out += "\033[2J\033[H";
+        // Select standard 5250-style colours before erasing the terminal so
+        // that cleared cells use the black background as well.
+        out += "\033[32;40m\033[2J\033[H";
 
         for (int row = 0; row < Screen5250::ROWS; ++row)
         {
+            char rowSeq[16];
+            std::snprintf(rowSeq, sizeof(rowSeq), "\033[%d;1H", row + 1);
+            out += rowSeq;
+
             for (int col = 0; col < Screen5250::COLS; ++col)
             {
                 const Cell5250& cell = screen.at(row, col);
@@ -58,21 +64,20 @@ class ScreenRenderer
                 out += c;
 
                 if (cell.attr != 0x20 && cell.attr != 0x00)
-                    out += "\033[0m";
-            }
-            // Move to start of next row explicitly (avoids relying on auto-wrap)
-            if (row < Screen5250::ROWS - 1)
-            {
-                out += '\n';
+                    out += "\033[32;40m";
             }
         }
 
-        // Position terminal cursor at the 5250 input cursor (1-based for ANSI)
-        char cursorSeq[32];
-        std::snprintf(cursorSeq, sizeof(cursorSeq),
-                      "\033[%d;%dH", screen.inputRow + 1, screen.inputCol + 1);
-        out += cursorSeq;
+        positionCursor(out, screen);
 
+        ::write(STDOUT_FILENO, out.data(), out.size());
+    }
+
+    /// Restore the terminal cursor to the active 5250 input location.
+    static void positionCursor(const Screen5250& screen)
+    {
+        std::string out;
+        positionCursor(out, screen);
         ::write(STDOUT_FILENO, out.data(), out.size());
     }
 
@@ -81,9 +86,17 @@ class ScreenRenderer
     {
         char seq[128];
         // Move to row 26 (below the 24-row screen + 1 blank)
-        std::snprintf(seq, sizeof(seq),
-                      "\033[26;1H\033[2K%s", msg.c_str());
+        std::snprintf(seq, sizeof(seq), "\033[26;1H\033[2K%s", msg.c_str());
         ::write(STDOUT_FILENO, seq, std::strlen(seq));
+    }
+
+  private:
+    static void positionCursor(std::string& out, const Screen5250& screen)
+    {
+        char cursorSeq[32];
+        std::snprintf(cursorSeq, sizeof(cursorSeq), "\033[%d;%dH",
+                      screen.inputRow + 1, screen.inputCol + 1);
+        out += cursorSeq;
     }
 };
 
