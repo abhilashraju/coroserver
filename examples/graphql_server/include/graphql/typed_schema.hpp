@@ -37,6 +37,18 @@ struct FieldSpec
     // Example: "/redfish/v1/Systems/{id}"
     // Leave empty for object fields (non-root).
     std::string redfishPath;
+    // When true the collection URL is fetched with ?$expand=*($levels=1) so
+    // all member data is inlined in a single response, avoiding one HTTP
+    // request per member.  Only set this for Redfish resources that support
+    // the $expand query parameter (e.g. Sensors on OpenBMC/bmcweb).
+    bool expandMembers = false;
+    // When true this isList field holds a Redfish collection link at
+    // projection time — i.e. the JSON value is {"@odata.id": "<url>"}
+    // rather than an inline array.  The executor will fetch that URL with
+    // ?$expand=*($levels=1) and project the resulting Members array in one
+    // request.  Use for sub-collections embedded in a parent object
+    // (e.g. PCIeFunctions inside a PCIeDevice body).
+    bool collectionLink = false;
 };
 
 struct ObjectSpec
@@ -99,6 +111,7 @@ class TypedSchema
                     fs.returnType = f.at("returnType").get<std::string>();
                     fs.isList = f.value("isList", false);
                     fs.scalar = f.value("scalar", false);
+                    fs.collectionLink = f.value("collectionLink", false);
                     for (const auto& a :
                          f.value("arguments", nlohmann::json::array()))
                     {
@@ -124,6 +137,7 @@ class TypedSchema
                     fs.isList = f.value("isList", false);
                     fs.scalar = f.value("scalar", false);
                     fs.redfishPath = f.value("redfishPath", std::string{});
+                    fs.expandMembers = f.value("expandMembers", false);
                     for (const auto& a :
                          f.value("arguments", nlohmann::json::array()))
                     {

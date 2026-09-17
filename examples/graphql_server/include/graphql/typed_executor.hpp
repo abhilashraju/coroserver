@@ -553,6 +553,56 @@ class TypedExecutor :
 
         if (fieldSpec.isList)
         {
+            // collectionLink: the JSON value is a {"@odata.id": "<url>"}
+            // link to a sub-collection rather than an inline array.
+            // Fetch the collection once with ?$expand=*($levels=1) so all
+            // member bodies arrive in a single response, then project them.
+            if (fieldSpec.collectionLink)
+            {
+                if (!value.is_object() || !value.contains("@odata.id"))
+                {
+                    co_return std::unexpected(
+                        "Expected collection link object for field '" +
+                        selection.name + "'");
+                }
+                const std::string collUrl =
+                    value["@odata.id"].get<std::string>() +
+                    "?$expand=*($levels=1)";
+
+                Result<nlohmann::json> collResult =
+                    co_await provider->getFresh(collUrl);
+                if (!collResult)
+                {
+                    co_return std::unexpected(collResult.error());
+                }
+                if (!collResult->contains("Members") ||
+                    !(*collResult)["Members"].is_array())
+                {
+                    co_return std::unexpected(
+                        "Expected Members array in collection link for '" +
+                        selection.name + "'");
+                }
+
+                nlohmann::json result = nlohmann::json::array();
+                for (const auto& member : (*collResult)["Members"])
+                {
+                    Result<nlohmann::json> itemResult = co_await projectObject(
+                        member, fieldSpec.returnType, selection.selections);
+                    if (itemResult)
+                    {
+                        result.push_back(std::move(*itemResult));
+                    }
+                    else
+                    {
+                        LOG_WARNING(
+                            "Skipping collection link member (projection "
+                            "failed): {}",
+                            itemResult.error());
+                    }
+                }
+                co_return result;
+            }
+
             if (!value.is_array())
             {
                 co_return std::unexpected(
@@ -708,8 +758,14 @@ class TypedExecutor :
         }
 
         nlohmann::json args = resolveArguments(selection, variables);
-        const std::string target =
-            expandPath(fieldSpec.redfishPath, args, fieldSpec);
+        std::string target = expandPath(fieldSpec.redfishPath, args, fieldSpec);
+
+        // When expandMembers is requested, ask the Redfish endpoint to inline
+        // all collection members so we avoid one HTTP request per member.
+        if (fieldSpec.expandMembers && fieldSpec.isList)
+        {
+            target += "?$expand=*($levels=1)";
+        }
 
         Result<nlohmann::json> payloadResult =
             fresh ? co_await provider->getFresh(target)
@@ -729,10 +785,37 @@ class TypedExecutor :
                     "'");
             }
 
-            // Collect the member IDs up front so we can launch all fetches
-            // concurrently via when_all.
+            const nlohmann::json& members = payload["Members"];
+
+            // Fast path: when expandMembers is set the collection was fetched
+            // with ?$expand=*($levels=1) so each Member entry already contains
+            // the full resource body — no additional per-member requests needed.
+            if (fieldSpec.expandMembers)
+            {
+                nlohmann::json result = nlohmann::json::array();
+                for (const auto& member : members)
+                {
+                    Result<nlohmann::json> projResult =
+                        co_await projectObject(member, fieldSpec.returnType,
+                                               selection.selections);
+                    if (projResult)
+                    {
+                        result.push_back(std::move(*projResult));
+                    }
+                    else
+                    {
+                        LOG_WARNING("Skipping expanded member (projection "
+                                    "failed): {}",
+                                    projResult.error());
+                    }
+                }
+                co_return result;
+            }
+
+            // Slow path: Members contains only @odata.id links — fetch each
+            // member individually in batches of kBatchSize.
             std::vector<std::string> memberIds;
-            for (const auto& member : payload["Members"])
+            for (const auto& member : members)
             {
                 if (member.contains("@odata.id"))
                 {

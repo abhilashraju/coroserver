@@ -155,7 +155,7 @@
         { "name": "sku",           "responseKey": "SKU",          "returnType": "String",       "isList": false, "scalar": true  },
         { "name": "deviceType",    "responseKey": "DeviceType",   "returnType": "String",       "isList": false, "scalar": true  },
         { "name": "pcieInterface", "responseKey": "PCIeInterface","returnType": "PCIeInterface", "isList": false, "scalar": false },
-        { "name": "pcieFunctions", "responseKey": "PCIeFunctions","returnType": "PCIeFunction",  "isList": true,  "scalar": false },
+        { "name": "pcieFunctions", "responseKey": "PCIeFunctions","returnType": "PCIeFunction",  "isList": true,  "scalar": false, "collectionLink": true },
         { "name": "status",        "responseKey": "Status",       "returnType": "Status",       "isList": false, "scalar": false }
       ]
     }
@@ -198,7 +198,16 @@
         { "name": "pcieDeviceId", "typeName": "ID", "required": true  },
         { "name": "id",           "typeName": "ID", "required": true  }
       ],
-      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{pcieDeviceId}/PCIeFunctions/{id}" }
+      "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{pcieDeviceId}/PCIeFunctions/{id}" },
+    { "name": "sensors",                "responseKey": "", "returnType": "Sensor",                 "isList": true,  "scalar": false,
+      "arguments": [{ "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" }],
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors", "expandMembers": true },
+    { "name": "sensor",                 "responseKey": "", "returnType": "Sensor",                 "isList": false, "scalar": false,
+      "arguments": [
+        { "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" },
+        { "name": "id",        "typeName": "ID", "required": true  }
+      ],
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors/{id}" }
   ],
 
   "subscriptions": [
@@ -223,7 +232,7 @@
       "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{id}" },
     { "name": "sensorUpdates",            "responseKey": "", "returnType": "Sensor",            "isList": true,  "scalar": false,
       "arguments": [{ "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" }],
-      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors" }
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors", "expandMembers": true }
   ],
 
   "dbusWatchers": [
