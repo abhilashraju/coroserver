@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <optional>
@@ -81,6 +82,22 @@ concept WebClientOrElseFunction =
     requires(T t, boost::system::error_code ec) {
         { t(ec) } -> std::same_as<AwaitableResult<boost::system::error_code>>;
     };
+
+// ---------------------------------------------------------------------------
+// Body-type tags — select the response body strategy via as<Tag>()
+// ---------------------------------------------------------------------------
+
+/// Tag: receive the response body as a std::string (default, existing path).
+struct StringBodyTag
+{};
+
+/// Tag: stream the response body directly into a file on disk.
+struct FileBodyTag
+{};
+
+/// Tag: receive the response body into a dynamic_body flat buffer.
+struct BufferBodyTag
+{};
 
 /**
  * @brief HTTP/HTTPS/Unix client builder and executor backed by ConnectionPool.
@@ -516,6 +533,18 @@ struct WebClient
         return pool_;
     }
 
+    // -----------------------------------------------------------------------
+    // Body-executor factory
+    //
+    // Usage:
+    //   .as<FileBodyTag>("/tmp/fw.bin").execute()   → (ec, path)
+    //   .as<BufferBodyTag>().execute()              → (ec,
+    //   response<dynamic_body>) .execute<Ret...>()  ← existing string-body
+    //   path, unchanged
+    // -----------------------------------------------------------------------
+    template <typename BodyTag = StringBodyTag, typename... Args>
+    auto as(Args&&... args);
+
   private:
     void initDefaults()
     {
@@ -560,5 +589,221 @@ struct WebClient
         }
     }
 };
+
+// ---------------------------------------------------------------------------
+// StringExecutor — thin wrapper that delegates to WebClient::execute<Ret...>()
+// so callers that use .as() / .as<StringBodyTag>() get the familiar path.
+// ---------------------------------------------------------------------------
+template <typename Stream>
+struct StringExecutor
+{
+    WebClient<Stream>& client;
+
+    template <typename... Ret>
+    auto execute()
+    {
+        return client.template execute<Ret...>();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// FileExecutor — streams the response body directly to a file on disk.
+// Returns (error_code, filesystem::path) so the caller can verify the path.
+// ---------------------------------------------------------------------------
+template <typename Stream>
+struct FileExecutor
+{
+    WebClient<Stream>& client;
+    std::filesystem::path filePath;
+
+    net::awaitable<std::pair<boost::system::error_code, std::filesystem::path>>
+        execute()
+    {
+        auto [hostOrPath, port] = client.getEndpoint();
+        Request req = client.buildRequest();
+
+        boost::system::error_code lastEc{};
+        int maxAttempts = std::max(1, client.retryPolicy.maxTries);
+
+        for (int attempt = 0; attempt < maxAttempts; ++attempt)
+        {
+            auto [acqEc,
+                  lease] = co_await client.pool_->acquire(hostOrPath, port);
+            if (acqEc)
+            {
+                lastEc = acqEc;
+                LOG_INFO("FileExecutor: retrying ({}/{}) connection to {}",
+                         attempt + 1, maxAttempts, hostOrPath);
+                continue;
+            }
+
+            boost::system::error_code sendEc =
+                co_await lease.get().send_request(req);
+            if (sendEc)
+            {
+                lease.markInvalid();
+                lastEc = sendEc;
+                LOG_INFO("FileExecutor: send failed, retrying ({}/{}) to {}",
+                         attempt + 1, maxAttempts, hostOrPath);
+                continue;
+            }
+
+            // Read response header first to verify HTTP status before writing
+            // any bytes to disk.  A non-2xx response (redirect, error page)
+            // must never be written into the firmware file.
+            auto [hec, statusCode] = co_await lease.get().readResponseHeader();
+            if (hec)
+            {
+                lease.markInvalid();
+                lastEc = hec;
+                LOG_INFO("FileExecutor: header read failed, retrying ({}/{}) "
+                         "to {}",
+                         attempt + 1, maxAttempts, hostOrPath);
+                continue;
+            }
+            if (statusCode < 200 || statusCode >= 300)
+            {
+                lease.markInvalid();
+                LOG_ERROR("FileExecutor: server returned HTTP {} for {}",
+                          statusCode, hostOrPath);
+                lastEc =
+                    make_error_code(boost::system::errc::connection_refused);
+                continue;
+            }
+
+            // Pre-open the destination file and stream the body directly into
+            // it.  readBodyAs() move-constructs from the stored header parser
+            // so Beast reuses the same parser state — no double-header parse,
+            // no body-limit surprise.  300s timeout for large firmware
+            // tarballs.
+            http::response<http::file_body> res;
+            beast::error_code fec;
+            res.body().open(filePath.c_str(), beast::file_mode::write, fec);
+            if (fec)
+            {
+                lease.markInvalid();
+                co_return std::make_pair(
+                    static_cast<boost::system::error_code>(fec), filePath);
+            }
+
+            auto [recvEc, fileRes] =
+                co_await lease.get().template readBodyAs<http::file_body>(
+                    std::move(res), std::chrono::seconds(300));
+            if (recvEc)
+            {
+                lease.markInvalid();
+                lastEc = recvEc;
+                LOG_INFO("FileExecutor: recv failed, retrying ({}/{}) to {}",
+                         attempt + 1, maxAttempts, hostOrPath);
+                continue;
+            }
+
+            if (!fileRes.keep_alive() || !client.request.keepAlive)
+            {
+                lease.markInvalid();
+            }
+
+            co_return std::make_pair(boost::system::error_code{}, filePath);
+        }
+
+        co_return std::make_pair(lastEc, filePath);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// BufferExecutor — receives the response body into a dynamic_body buffer.
+// Returns (error_code, http::response<http::dynamic_body>).
+// ---------------------------------------------------------------------------
+template <typename Stream>
+struct BufferExecutor
+{
+    WebClient<Stream>& client;
+
+    net::awaitable<std::pair<boost::system::error_code,
+                             http::response<http::dynamic_body>>>
+        execute()
+    {
+        using DynResponse = http::response<http::dynamic_body>;
+
+        auto [hostOrPath, port] = client.getEndpoint();
+        Request req = client.buildRequest();
+
+        boost::system::error_code lastEc{};
+        int maxAttempts = std::max(1, client.retryPolicy.maxTries);
+
+        for (int attempt = 0; attempt < maxAttempts; ++attempt)
+        {
+            auto [acqEc,
+                  lease] = co_await client.pool_->acquire(hostOrPath, port);
+            if (acqEc)
+            {
+                lastEc = acqEc;
+                LOG_INFO("BufferExecutor: retrying ({}/{}) connection to {}",
+                         attempt + 1, maxAttempts, hostOrPath);
+                continue;
+            }
+
+            boost::system::error_code sendEc =
+                co_await lease.get().send_request(req);
+            if (sendEc)
+            {
+                lease.markInvalid();
+                lastEc = sendEc;
+                LOG_INFO("BufferExecutor: send failed, retrying ({}/{}) to {}",
+                         attempt + 1, maxAttempts, hostOrPath);
+                continue;
+            }
+
+            auto [recvEc, res] =
+                co_await lease.get()
+                    .template receive_response_as<http::dynamic_body>();
+            if (recvEc)
+            {
+                lease.markInvalid();
+                lastEc = recvEc;
+                LOG_INFO("BufferExecutor: recv failed, retrying ({}/{}) to {}",
+                         attempt + 1, maxAttempts, hostOrPath);
+                continue;
+            }
+
+            if (!res.keep_alive() || !client.request.keepAlive)
+            {
+                lease.markInvalid();
+            }
+
+            co_return std::make_pair(recvEc, std::move(res));
+        }
+
+        co_return std::make_pair(lastEc, DynResponse{});
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Out-of-line definition of WebClient::as<BodyTag>(args...)
+// Must be after the executor types are defined.
+// ---------------------------------------------------------------------------
+template <typename Stream>
+template <typename BodyTag, typename... Args>
+auto WebClient<Stream>::as(Args&&... args)
+{
+    if constexpr (std::is_same_v<BodyTag, FileBodyTag>)
+    {
+        static_assert(sizeof...(Args) == 1,
+                      "as<FileBodyTag> requires exactly one path argument");
+        return FileExecutor<Stream>{
+            *this, std::filesystem::path(std::forward<Args>(args)...)};
+    }
+    else if constexpr (std::is_same_v<BodyTag, BufferBodyTag>)
+    {
+        static_assert(sizeof...(Args) == 0,
+                      "as<BufferBodyTag> takes no arguments");
+        return BufferExecutor<Stream>{*this};
+    }
+    else
+    {
+        // StringBodyTag or default — delegates to the existing execute().
+        return StringExecutor<Stream>{*this};
+    }
+}
 
 } // namespace NSNAME

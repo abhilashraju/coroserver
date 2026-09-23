@@ -163,8 +163,11 @@ class PooledConnection
 
     /// Mark the connection as invalid (e.g. on socket error or HTTP Connection:
     /// close) so it will be destroyed instead of returned to the pool.
+    /// Resets parser state and the read buffer so no stale bytes linger.
     void markInvalid()
     {
+        if (client_)
+            client_->resetParserState();
         valid_ = false;
     }
 
@@ -389,6 +392,9 @@ class ConnectionPool :
 
             if (now - entry.lastUsed <= config_.idleTimeout)
             {
+                // Clear any leftover bytes from the previous response before
+                // handing the connection to the next request.
+                entry.client->resetParserState();
                 return std::move(entry.client);
             }
             // Expired idle connection is dropped and destroyed here
