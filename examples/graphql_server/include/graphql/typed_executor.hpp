@@ -77,48 +77,70 @@ class TimerTrigger : public SubscriptionTrigger
     std::chrono::steady_clock::duration interval_;
 };
 
-// EventTrigger wakes the subscription loop when a D-Bus signal fires, but
-// debounces rapid bursts of signals (e.g. many sensors updating at once)
-// into a single tick by resetting a short deadline on each fire() call.
-// Only after the debounce window passes with no further fire() calls does
-// wait() return — preventing a flood of back-to-back subscription ticks.
+// EventTrigger wakes the subscription loop on D-Bus signals with throttling.
+//
+// The first fire() in a burst starts a fixed collection window (windowMs).
+// All subsequent fire() calls within that window are silently absorbed.
+// When the window expires the loop does exactly one fetch, no matter how many
+// signals arrived. This guarantees a fetch rate no faster than 1/windowMs
+// even under a continuous stream of D-Bus events.
+//
+//   fire()   → pending_=true, timer_.cancel() to wake a sleeping wait().
+//   cancel() → cancelled_=true, timer_.cancel().
+//
+//   wait()  → Phase 1: if no event pending, arm to max() and sleep.
+//             Phase 2: arm a fresh local timer for windowMs_, clear pending_,
+//             wait for the fixed window to expire — absorbing any fire() calls
+//             that arrive during the window — then return true for one fetch.
 class EventTrigger : public SubscriptionTrigger
 {
   public:
-    // debounceMs: how long to wait after the last fire() before waking the
-    // loop.  500 ms coalesces typical sensor burst updates into one tick.
     explicit EventTrigger(boost::asio::any_io_executor exec,
-                          std::chrono::milliseconds debounceMs =
-                              std::chrono::milliseconds{500}) :
-        timer_(std::move(exec)), debounceMs_(debounceMs)
+                          std::chrono::milliseconds windowMs =
+                              std::chrono::milliseconds{2000}) :
+        timer_(std::move(exec)), windowMs_(windowMs)
     {
         timer_.expires_at(std::chrono::steady_clock::time_point::max());
     }
 
     boost::asio::awaitable<bool> wait() override
     {
-        // Re-arm to max before awaiting so fire() can set the debounce
-        // deadline on the next event.
-        timer_.expires_at(std::chrono::steady_clock::time_point::max());
+        // Phase 1: sleep until the first fire() of the next burst (or cancel).
+        if (!pending_.load())
+        {
+            timer_.expires_at(std::chrono::steady_clock::time_point::max());
+            boost::system::error_code ec;
+            co_await timer_.async_wait(
+                boost::asio::redirect_error(boost::asio::use_awaitable, ec));
+            if (cancelled_.load())
+            {
+                co_return false;
+            }
+        }
+
+        // Phase 2: collection window. Start a fixed timer, clear pending_ so
+        // any fire() calls that arrive during the window are simply absorbed
+        // (they set pending_=true again, but we never re-check it here).
+        // When the window expires, return true for exactly one fetch.
+        pending_.store(false);
+        auto window = boost::asio::steady_timer{
+            co_await boost::asio::this_coro::executor};
+        window.expires_after(windowMs_);
         boost::system::error_code ec;
-        co_await timer_.async_wait(
+        co_await window.async_wait(
             boost::asio::redirect_error(boost::asio::use_awaitable, ec));
-        // Timer expired naturally → debounce window elapsed, proceed.
-        // operation_aborted here means cancel() was called (shutdown), stop.
-        co_return (ec != boost::asio::error::operation_aborted);
+        co_return !cancelled_.load();
     }
 
-    // Called by notifyFieldsChanged on every matching D-Bus signal.
-    // Resets the debounce deadline so the loop only wakes once the burst
-    // of signals has settled for debounceMs_.
     void fire() override
     {
-        timer_.expires_after(debounceMs_);
+        pending_.store(true);
+        timer_.cancel(); // wakes phase-1 sleep; no-op if loop is fetching
     }
 
     void cancel() override
     {
-        timer_.expires_at(std::chrono::steady_clock::time_point::min());
+        cancelled_.store(true);
         timer_.cancel();
     }
 
@@ -133,8 +155,10 @@ class EventTrigger : public SubscriptionTrigger
     }
 
   private:
-    boost::asio::steady_timer timer_;
-    std::chrono::milliseconds debounceMs_;
+    boost::asio::steady_timer timer_;     // phase-1 wakeup only
+    std::chrono::milliseconds windowMs_;
+    std::atomic<bool> pending_{false};
+    std::atomic<bool> cancelled_{false};
 };
 
 template <typename Provider>
