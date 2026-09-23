@@ -215,8 +215,11 @@ class HttpClient
     }
     net::io_context& ioc;
     ssl::stream<Stream> stream_;
-    boost::beast::flat_buffer beastBuffer_; // used by http::async_read
-    net::streambuf sseBuffer_;              // used by readUntil (SSE frames)
+    // Pre-allocate 256 KB so Beast issues large socket reads on each async_read
+    // call rather than growing the buffer piecemeal.  Each TLS record is 16 KB,
+    // so 256 KB covers 16 records per read — good amortisation on slow links.
+    boost::beast::flat_buffer beastBuffer_{256 * 1024};
+    net::streambuf sseBuffer_; // used by readUntil (SSE frames)
     // Stored between readResponseHeader() and readBodyAs() calls.
     std::unique_ptr<http::response_parser<http::empty_body>> headerParser_;
 };

@@ -145,6 +145,11 @@ struct WebClient
     };
     RetryPolicy retryPolicy;
 
+    /// Timeout applied to the body-read phase of a file download (seconds).
+    /// 300 s is fine for small images; large firmware tarballs on slow BMC
+    /// links may need 1800 s or more.  Configured via withDownloadTimeout().
+    std::chrono::seconds downloadTimeout{300};
+
     std::shared_ptr<ConnectionPool<Stream>> pool_;
 
     /// Construct WebClient with an explicit shared ConnectionPool instance
@@ -204,6 +209,12 @@ struct WebClient
     WebClient& withRetries(int maxRetries)
     {
         retryPolicy.maxTries = maxRetries;
+        return *this;
+    }
+
+    WebClient& withDownloadTimeout(int seconds)
+    {
+        downloadTimeout = std::chrono::seconds(seconds);
         return *this;
     }
 
@@ -688,7 +699,7 @@ struct FileExecutor
 
             auto [recvEc, fileRes] =
                 co_await lease.get().template readBodyAs<http::file_body>(
-                    std::move(res), std::chrono::seconds(300));
+                    std::move(res), client.downloadTimeout);
             if (recvEc)
             {
                 lease.markInvalid();
