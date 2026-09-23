@@ -268,28 +268,28 @@ struct DbusSignalWatcher : public DbusWatcher<DbusSignalWatcher<TYPE>, TYPE>
         return *this;
     }
 
-    constexpr auto interfacesAdded() noexcept
+    DbusSignalWatcher& interfacesAdded() noexcept
     {
         signalMatchRule = sdbusplus::bus::match::rules::interfacesAdded();
         addMatch();
         return *this;
     }
 
-    constexpr auto interfacesRemoved() noexcept
+    DbusSignalWatcher& interfacesRemoved() noexcept
     {
         signalMatchRule = sdbusplus::bus::match::rules::interfacesRemoved();
         addMatch();
         return *this;
     }
 
-    constexpr auto interfacesAdded(std::string_view p) noexcept
+    DbusSignalWatcher& interfacesAdded(std::string_view p) noexcept
     {
         signalMatchRule = sdbusplus::bus::match::rules::interfacesAdded(p);
         addMatch();
         return *this;
     }
 
-    constexpr auto interfacesAddedAtPath(std::string_view p) noexcept
+    DbusSignalWatcher& interfacesAddedAtPath(std::string_view p) noexcept
     {
         signalMatchRule =
             sdbusplus::bus::match::rules::interfacesAddedAtPath(p);
@@ -297,14 +297,14 @@ struct DbusSignalWatcher : public DbusWatcher<DbusSignalWatcher<TYPE>, TYPE>
         return *this;
     }
 
-    constexpr auto interfacesRemoved(std::string_view p) noexcept
+    DbusSignalWatcher& interfacesRemoved(std::string_view p) noexcept
     {
         signalMatchRule = sdbusplus::bus::match::rules::interfacesRemoved(p);
         addMatch();
         return *this;
     }
 
-    constexpr auto interfacesRemovedAtPath(std::string_view p) noexcept
+    DbusSignalWatcher& interfacesRemovedAtPath(std::string_view p) noexcept
     {
         signalMatchRule =
             sdbusplus::bus::match::rules::interfacesRemovedAtPath(p);
