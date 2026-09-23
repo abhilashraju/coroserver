@@ -30,13 +30,13 @@ using DBusInterfacesMap =
 using ManagedObjectType =
     std::vector<std::pair<sdbusplus::message::object_path, DBusInterfacesMap>>;
 
-// Map of service name to list of interfaces
-using MapperServiceMap =
-    std::vector<std::pair<std::string, std::vector<std::string>>>;
+// Map of service name to list of interfaces.
+// D-Bus wire type: a{sas} — must be std::map, not vector<pair>.
+using MapperServiceMap = std::map<std::string, std::vector<std::string>>;
 
-// Map of object paths to MapperServiceMaps
-using MapperGetSubTreeResponse =
-    std::vector<std::pair<std::string, MapperServiceMap>>;
+// Map of object paths to MapperServiceMaps.
+// Matches the SubTreeMap alias in sdbus_calls.hpp (a{sa{sas}}).
+using MapperGetSubTreeResponse = reactor::SubTreeMap;
 
 using MapperGetObject =
     std::vector<std::pair<std::string, std::vector<std::string>>>;

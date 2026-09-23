@@ -107,15 +107,13 @@ using InterfaceMap = std::map<std::string, PropertyMap>;
  */
 template <typename... RetTypes, typename... InputArgs>
 inline auto awaitable_dbus_method_call(
-    sdbusplus::asio::connection& bus, std::string service,
-    std::string objpath, std::string interf,
-    std::string method, InputArgs... a)
+    sdbusplus::asio::connection& bus, std::string service, std::string objpath,
+    std::string interf, std::string method, InputArgs... a)
     -> AwaitableResult<RetTypes...>
 {
     return make_awaitable<RetTypes...>(
-        [](auto promise, sdbusplus::asio::connection& bus,
-           std::string service, std::string objpath,
-           std::string interf, std::string method,
+        [](auto promise, sdbusplus::asio::connection& bus, std::string service,
+           std::string objpath, std::string interf, std::string method,
            InputArgs... a) {
             bus.async_method_call(
                 [promise = std::move(promise)](boost::system::error_code ec,
@@ -123,9 +121,8 @@ inline auto awaitable_dbus_method_call(
                     promise.setValues(ec, std::move(values)...);
                 },
                 service, objpath, interf, method, a...);
-        })(
-        bus, std::move(service), std::move(objpath), std::move(interf),
-        std::move(method), std::move(a)...);
+        })(bus, std::move(service), std::move(objpath), std::move(interf),
+           std::move(method), std::move(a)...);
 }
 
 /**
@@ -326,35 +323,29 @@ inline AwaitableResult<ReturnType> callObjectMapperMethod(
         method, args...);
 }
 
+// Canonical type for GetSubTree responses.
+// D-Bus wire type: a{sa{sas}}
+//   object-path → service-name → array of interfaces
+using SubTreeMap =
+    std::map<std::string, std::map<std::string, std::vector<std::string>>>;
+
 /**
- * @brief Query D-Bus object mapper for a subtree of objects
+ * @brief Query D-Bus object mapper for a subtree of objects.
  *
- * Retrieves objects and their interfaces from the object mapper within a
- * specified path and depth.
+ * Returns a SubTreeMap: path → (service → interfaces).
+ * The D-Bus wire type is a{sa{sas}}; using std::map matches it exactly.
  *
- * @tparam SubTreeMapType Expected return type (typically std::map<std::string,
- * InterfaceMap>)
- * @param bus D-Bus connection object
- * @param path Root path to search from
- * @param depth Search depth (0 = only path, -1 = unlimited)
- * @param interfaces Optional filter for specific interfaces
- * @return AwaitableResult<SubTreeMapType> Tuple of [error_code, subtree_map]
- *
- * Example:
- * @code
- * using SubTree = std::map<std::string, std::map<std::string,
- * std::vector<std::string>>>; auto [ec, subtree] = co_await
- * getSubTree<SubTree>( bus, "/xyz/openbmc_project/inventory", 0,
- *     {"xyz.openbmc_project.Inventory.Item"});
- * @endcode
+ * @param bus        D-Bus connection object.
+ * @param path       Root path to search from.
+ * @param depth      Search depth (0 = unlimited on OpenBMC mapper).
+ * @param interfaces Optional interface filter.
  */
-template <typename SubTreeMapType>
-inline AwaitableResult<SubTreeMapType> getSubTree(
+inline AwaitableResult<SubTreeMap> getSubTree(
     sdbusplus::asio::connection& bus, const std::string& path, int depth,
     const std::vector<std::string>& interfaces = {})
 {
-    return callObjectMapperMethod<SubTreeMapType>(bus, "GetSubTree", path,
-                                                  depth, interfaces);
+    return callObjectMapperMethod<SubTreeMap>(bus, "GetSubTree", path, depth,
+                                              interfaces);
 }
 
 /**
@@ -612,7 +603,8 @@ inline AwaitableResult<std::string> introspect(
     const sdbusplus::message::object_path& path)
 {
     co_return co_await awaitable_dbus_method_call<std::string>(
-        bus, service, std::string(path), dbusIntrospectableInterface, "Introspect");
+        bus, service, std::string(path), dbusIntrospectableInterface,
+        "Introspect");
 }
 /**
  * @brief Get default value for a type

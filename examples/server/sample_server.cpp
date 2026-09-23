@@ -163,9 +163,6 @@ int main(int argc, const char* argv[])
             "/getSubTree",
             [&](Request& req,
                 const http_function& params) -> net::awaitable<Response> {
-                using SubTreeType = std::vector<std::pair<
-                    std::string, std::vector<std::pair<
-                                     std::string, std::vector<std::string>>>>>;
                 nlohmann::json data;
                 try
                 {
@@ -182,7 +179,7 @@ int main(int argc, const char* argv[])
                     co_return make_bad_request_error("Invalid JSON",
                                                      req.version());
                 }
-                auto [ec, subtree] = co_await getSubTree<SubTreeType>(
+                auto [ec, subtree] = co_await getSubTree(
                     *conn, data["path"], data["depth"], data["interfaces"]);
                 if (ec)
                 {
