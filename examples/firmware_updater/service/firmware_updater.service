@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenBMC Firmware Updater — polls remote server and downloads new firmware
+After=network-online.target dbus.service xyz.openbmc_project.Software.BMC.Updater.service
+Wants=network-online.target dbus.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+ExecStart=/usr/bin/firmware_updater -c /etc/firmware_updater/firmware_updater.json
+Type=simple
+Restart=on-failure
+RestartSec=30
+# StateDirectory creates /var/lib/firmware_updater automatically if absent
+StateDirectory=firmware_updater
+
+[Install]
+WantedBy=multi-user.target

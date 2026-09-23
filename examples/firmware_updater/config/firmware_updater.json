@@ -1,0 +1,21 @@
+{
+  "_comment": "FirmwareUpdater configuration — edit before deploying",
+
+  "serverHost": "firmware.com",
+  "serverPort": "443",
+  "cataloguePath": "/firmware/catalogue.json",
+
+  "auth": {
+    "username": "fw-reader",
+    "password": "CHANGEME"
+  },
+
+  "pollIntervalSeconds": 3600,
+  "pollAtStartup": true,
+
+  "deniedVersions": [],
+
+  "allowedVersions": [],
+
+  "downloadDir": "/var/lib/firmware_updater"
+}
