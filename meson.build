@@ -66,6 +66,7 @@ sdbusplus_dep = dependency('sdbusplus', required: false, include_type: 'system')
 #add_project_arguments(
     #cxx.get_supported_arguments(['-DBOOST_ASIO_DISABLE_THREADS']),language: 'cpp')
 subdir('examples')
+subdir('tests')
 
 
 # Install headers
