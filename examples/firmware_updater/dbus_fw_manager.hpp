@@ -102,12 +102,13 @@ struct FirmwareRecord
  *      Emitted once per newly downloaded image.  bmcweb / graphql-server
  *      listen for this signal to push Redfish event notifications.
  */
-class DbusFirmwareManager
+class DbusFirmwareManager :
+    public std::enable_shared_from_this<DbusFirmwareManager>
 {
   public:
-    DbusFirmwareManager(sdbusplus::asio::connection& conn,
+    DbusFirmwareManager(std::shared_ptr<sdbusplus::asio::connection> conn,
                         sdbusplus::asio::object_server& objServer) :
-        conn_(conn), objServer_(objServer)
+        conn_(std::move(conn)), objServer_(objServer)
     {
         managerIface_ =
             objServer_.add_interface(fwUpdaterBasePath, fwManagerInterface);
@@ -273,8 +274,8 @@ class DbusFirmwareManager
     void emitFirmwareAvailable(const std::string& version,
                                const std::string& localPath)
     {
-        auto msg = conn_.new_signal(fwUpdaterBasePath, fwManagerInterface,
-                                    "FirmwareAvailable");
+        auto msg = conn_->new_signal(fwUpdaterBasePath, fwManagerInterface,
+                                     "FirmwareAvailable");
         msg.append(version, localPath);
         msg.signal_send();
         LOG_INFO("Emitted FirmwareAvailable signal: version={} path={}",
@@ -294,26 +295,42 @@ class DbusFirmwareManager
         LOG_INFO("Install requested: version={} path={}", version, localPath);
 
         boost::asio::co_spawn(
-            conn_.get_io_context(),
-            [this, version, localPath]() -> boost::asio::awaitable<void> {
-                co_await invokeSoftwareUpdate(version, localPath);
-            }(),
+            conn_->get_io_context(),
+            invokeSoftwareUpdate(shared_from_this(), version, localPath),
             boost::asio::detached);
     }
 
-    boost::asio::awaitable<void> invokeSoftwareUpdate(
-        const std::string& version, const std::string& localPath)
+    // Static so the coroutine frame owns 'self' directly — no raw 'this'
+    // captured across suspension points.  The shared_ptr keeps
+    // DbusFirmwareManager alive for the full duration of the coroutine.
+    static boost::asio::awaitable<void> invokeSoftwareUpdate(
+        std::shared_ptr<DbusFirmwareManager> self, const std::string& version,
+        const std::string& localPath)
     {
         namespace fs = std::filesystem;
         constexpr auto activationIface =
             "xyz.openbmc_project.Software.Activation";
         constexpr auto softwareRoot = "/xyz/openbmc_project/software";
 
-        // ── Step 1: copy image into /tmp/images/
-        // ────────────────────────────── /tmp/images is always present
-        // (symlinked by the BMC rootfs). phosphor-software-manager watches it
-        // via inotify, validates the image and emits InterfacesAdded on
-        // softwareRoot when ready.
+        // ── Step 1: subscribe BEFORE the file lands ──────────────────────────
+        // The match must be registered on the D-Bus daemon before fs::copy_file
+        // returns.  copy_file is a blocking syscall; phosphor-software-manager
+        // reacts to the inotify event synchronously and can emit
+        // InterfacesAdded before this coroutine resumes — causing watchOnce to
+        // miss the signal and time out.  Subscribing first closes that race
+        // window entirely.
+        LOG_INFO("[diag] Step1: creating signalWatcher for InterfacesAdded at "
+                 "{} self.use_count={}",
+                 softwareRoot, self.use_count());
+        auto signalWatcher = reactor::DbusSignalWatcher<
+            sdbusplus::message_t>::interfacesAddedAtPath(self->conn_,
+                                                         softwareRoot);
+
+        // ── Step 2: copy image into /tmp/images/ ─────────────────────────────
+        // /tmp/images is always present (symlinked by the BMC rootfs).
+        // phosphor-software-manager watches it via inotify, validates the image
+        // and emits InterfacesAdded on softwareRoot when ready.  The match
+        // above is already registered so the signal cannot be missed.
         constexpr auto stagingDir = "/tmp/images";
         fs::path dest = fs::path(stagingDir) / fs::path(localPath).filename();
         std::error_code fec;
@@ -327,21 +344,23 @@ class DbusFirmwareManager
         }
         LOG_INFO("Staged firmware to {}", dest.string());
 
-        // ── Step 2: wait for InterfacesAdded via DbusSignalWatcher ───────────
-        // watchOnce suspends until the signal fires or the 120s timeout
-        // expires.
-        auto connPtr =
-            std::shared_ptr<sdbusplus::asio::connection>(&conn_, [](auto*) {});
-        auto signalWatcher =
-            reactor::DbusSignalWatcher<sdbusplus::message_t>::create(connPtr);
-        signalWatcher->interfacesAddedAtPath(softwareRoot);
-
+        // ── Step 3: wait for InterfacesAdded via DbusSignalWatcher ───────────
+        // watchOnce suspends until the signal fires or the 30s timeout expires.
+        LOG_INFO("[diag] Step3(signal): entering watchOnce(30s) for version={}",
+                 version);
         auto msgOpt =
-            co_await signalWatcher->watchOnce(std::chrono::seconds(120));
+            co_await signalWatcher->watchOnce(std::chrono::seconds(30));
+        // Explicitly release the match registration before any co_return so
+        // the D-Bus unsubscribe call completes while conn_ is still alive.
+        signalWatcher.reset();
+        LOG_INFO(
+            "[diag] Step3(signal): watchOnce returned msgOpt={} for version={}",
+            msgOpt.has_value(), version);
         if (!msgOpt)
         {
-            LOG_ERROR("Timed out waiting for activation object for version={}",
-                      version);
+            LOG_ERROR("Timed out waiting for activation object for version={} "
+                      "self.use_count={}",
+                      version, self.use_count());
             co_return;
         }
 
@@ -360,11 +379,12 @@ class DbusFirmwareManager
         }
         LOG_INFO("Activation object ready: {}", newObjPath.str);
 
-        // ── Step 3: find owning service and set RequestedActivation
-        // ───────────
+        // ── Step 4: find owning service and set RequestedActivation ──────────
+        LOG_INFO("[diag] Step4: getObjects for {}", newObjPath.str);
         using ObjMap = std::map<std::string, std::vector<std::string>>;
         auto [objEc, objInfo] = co_await reactor::getObjects<ObjMap>(
-            conn_, newObjPath.str, std::vector<std::string>{activationIface});
+            *self->conn_, newObjPath.str,
+            std::vector<std::string>{activationIface});
         if (objEc || objInfo.empty())
         {
             LOG_ERROR("Cannot find service for {}: {}", newObjPath.str,
@@ -372,12 +392,15 @@ class DbusFirmwareManager
             co_return;
         }
         const std::string& service = objInfo.begin()->first;
+        LOG_INFO("[diag] Step4: activation service={}", service);
 
         constexpr auto requestedActive =
             "xyz.openbmc_project.Software.Activation.RequestedActivations."
             "Active";
+        LOG_INFO("[diag] Step4: setting RequestedActivation on {}",
+                 newObjPath.str);
         auto [setEc] = co_await reactor::setProperty<std::string>(
-            conn_, service, newObjPath.str, activationIface,
+            *self->conn_, service, newObjPath.str, activationIface,
             "RequestedActivation", std::string{requestedActive});
         if (setEc)
         {
@@ -385,45 +408,53 @@ class DbusFirmwareManager
                       setEc.message());
             co_return;
         }
+        LOG_INFO("[diag] Step4: RequestedActivation set successfully");
 
-        // ── Step 4: poll Activation property until terminal state
-        // ───────────── watchOnce suspends for one property-change event (with
-        // a per-call timeout).  Intermediate states like "Activating" keep us
-        // looping; Active / Failed / Invalid exit.
+        // ── Step 5: watch Activation property until terminal state ───────────
+        // watch() loops continuously; the bool-returning callback returns false
+        // to stop watching when a terminal state is reached.
+        LOG_INFO("[diag] Step5: creating propWatcher for Activation on {} "
+                 "self.use_count={}",
+                 newObjPath.str, self.use_count());
         auto propWatcher = reactor::DbusPropertyWatcher<std::string>::create(
-            connPtr, newObjPath.str, activationIface, "Activation");
+            self->conn_, newObjPath.str, activationIface, "Activation");
 
-        while (true)
-        {
-            auto stateOpt =
-                co_await propWatcher->watchOnce(std::chrono::seconds(300));
-            if (!stateOpt)
-            {
-                LOG_ERROR(
-                    "Timed out waiting for activation state for version={}",
-                    version);
-                break;
-            }
-            LOG_INFO("Activation state for {}: {}", version, *stateOpt);
-            if (stateOpt->ends_with("Active"))
-            {
-                LOG_INFO("Firmware {} activated successfully", version);
-                removeFirmware(version);
-                break;
-            }
-            if (stateOpt->ends_with("Failed") || stateOpt->ends_with("Invalid"))
-            {
-                LOG_ERROR("Firmware {} activation failed: {}", version,
-                          *stateOpt);
-                break;
-            }
-            // Intermediate state (e.g. Activating) — wait for the next change.
-        }
+        LOG_INFO("[diag] Step5: entering watch() loop");
+        co_await propWatcher->watch(
+            [self, version](const boost::system::error_code& ec,
+                            std::optional<std::string> stateOpt)
+                -> boost::asio::awaitable<bool> {
+                if (ec || !stateOpt)
+                {
+                    LOG_ERROR(
+                        "Error watching activation state for version={}: {} "
+                        "self.use_count={}",
+                        version, ec.message(), self.use_count());
+                    co_return false;
+                }
+                LOG_INFO("Activation state for {}: {}", version, *stateOpt);
+                if (stateOpt->ends_with("Active"))
+                {
+                    LOG_INFO("Firmware {} activated successfully", version);
+                    self->removeFirmware(version);
+                    co_return false;
+                }
+                if (stateOpt->ends_with("Failed") ||
+                    stateOpt->ends_with("Invalid"))
+                {
+                    LOG_ERROR("Firmware {} activation failed: {}", version,
+                              *stateOpt);
+                    co_return false;
+                }
+                co_return true; // Activating — keep watching
+            },
+            std::chrono::minutes(2));
+        LOG_INFO("[diag] Step5: watch() loop exited for version={}", version);
     }
 
     // ── Members ───────────────────────────────────────────────────────────
 
-    sdbusplus::asio::connection& conn_;
+    std::shared_ptr<sdbusplus::asio::connection> conn_;
     sdbusplus::asio::object_server& objServer_;
     std::shared_ptr<sdbusplus::asio::dbus_interface> managerIface_;
     // version string → record

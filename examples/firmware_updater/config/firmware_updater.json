@@ -1,8 +1,8 @@
 {
   "_comment": "FirmwareUpdater configuration — edit before deploying",
 
-  "serverHost": "firmware.com",
-  "serverPort": "443",
+  "serverHost": "9.10.239.128",
+  "serverPort": "8444",
   "cataloguePath": "/firmware/catalogue.json",
 
   "auth": {

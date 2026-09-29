@@ -37,7 +37,7 @@ namespace net = boost::asio;
  * deadlock the event loop).
  */
 net::awaitable<void> runCheckCycle(sdbusplus::asio::connection& conn,
-                                   DbusFirmwareManager& dbusManager,
+                                   DbusFirmwareManager* dbusManager,
                                    const AppConfig& cfg)
 {
     auto executor = co_await net::this_coro::executor;
@@ -79,7 +79,7 @@ net::awaitable<void> runCheckCycle(sdbusplus::asio::connection& conn,
     // 4. Download each candidate.
     for (const auto& entry : candidates)
     {
-        if (dbusManager.hasVersion(entry.version))
+        if (dbusManager->hasVersion(entry.version))
         {
             LOG_INFO("Version {} already registered — skipping download",
                      entry.version);
@@ -102,8 +102,8 @@ net::awaitable<void> runCheckCycle(sdbusplus::asio::connection& conn,
         // inside a coroutine because they flush sd_bus synchronously.
         // net::post schedules the registration at the top of the event loop
         // after the co_await stack has fully unwound.
-        net::post(executor, [&dbusManager, result, entry]() mutable {
-            dbusManager.onFirmwareDownloaded(result, entry);
+        net::post(executor, [dbusManager, result, entry]() mutable {
+            dbusManager->onFirmwareDownloaded(result, entry);
         });
     }
 }
@@ -118,7 +118,7 @@ net::awaitable<void> runCheckCycle(sdbusplus::asio::connection& conn,
  * means startup-only (one-shot).
  */
 net::awaitable<void> pollingLoop(sdbusplus::asio::connection& conn,
-                                 DbusFirmwareManager& dbusManager,
+                                 DbusFirmwareManager* dbusManager,
                                  const AppConfig& cfg)
 {
     auto executor = co_await net::this_coro::executor;
@@ -197,19 +197,23 @@ int main(int argc, const char* argv[])
 
         sdbusplus::asio::object_server objServer(conn);
 
-        // The DbusFirmwareManager registers D-Bus objects/interfaces here,
-        // before ioc.run() — safe from the main thread.
-        DbusFirmwareManager dbusManager(*conn, objServer);
+        // The DbusFirmwareManager is heap-allocated so shared_from_this()
+        // works inside triggerInstall / invokeSoftwareUpdate coroutines.
+        auto dbusManager =
+            std::make_shared<DbusFirmwareManager>(conn, objServer);
 
         // ── Spawn polling loop ────────────────────────────────────────────
-        net::co_spawn(ioc, pollingLoop(*conn, dbusManager, cfg), net::detached);
+        net::co_spawn(ioc, pollingLoop(*conn, dbusManager.get(), cfg),
+                      net::detached);
 
         // ── Wire CheckNow D-Bus callback ──────────────────────────────────
-        // Captured by reference — all objects outlive ioc.run().
-        dbusManager.setCheckNowCallback([&ioc, &conn, &dbusManager, &cfg]() {
-            net::co_spawn(ioc, runCheckCycle(*conn, dbusManager, cfg),
-                          net::detached);
-        });
+        // Captured by value (shared_ptr) — keeps manager alive for the
+        // duration of any in-flight coroutine.
+        dbusManager->setCheckNowCallback(
+            [&ioc, &conn, mgr = dbusManager, &cfg]() {
+                net::co_spawn(ioc, runCheckCycle(*conn, mgr.get(), cfg),
+                              net::detached);
+            });
 
         LOG_INFO("FirmwareUpdater D-Bus service running — objects at {}",
                  fwUpdaterBasePath);
