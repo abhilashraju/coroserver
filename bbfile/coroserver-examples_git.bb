@@ -34,6 +34,7 @@ PACKAGES =+ " \
     ${PN}-lldp-discoverd \
     ${PN}-redfishproxy \
     ${PN}-i2c-service \
+    ${PN}-firmware-updater \
 "
 
 PACKAGES =+ "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
@@ -106,12 +107,18 @@ FILES:${PN}-graphql-dbus-client = " \
     ${sysconfdir}/graphql_dbus_client/satellite_queries.json \
 "
 
+FILES:${PN}-firmware-updater = " \
+    ${bindir}/firmware_updater \
+    ${systemd_system_unitdir}/firmware_updater.service \
+    ${sysconfdir}/firmware_updater/firmware_updater.json \
+"
+
 FILES:${PN}-dev = " \
     ${includedir}/reactor \
     ${libdir}/pkgconfig/reactor.pc \
 "
 
-SYSTEMD_PACKAGES = "${PN}-graphql ${PN}-graphql-dbus-client ${PN}-lldp-discoverd ${PN}-redfishproxy ${PN}-i2c-service"
+SYSTEMD_PACKAGES = "${PN}-graphql ${PN}-graphql-dbus-client ${PN}-lldp-discoverd ${PN}-redfishproxy ${PN}-i2c-service ${PN}-firmware-updater"
 SYSTEMD_PACKAGES += "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
 
 SYSTEMD_SERVICE:${PN}-graphql = "graphql_redfish_server.service"
@@ -119,6 +126,7 @@ SYSTEMD_SERVICE:${PN}-lldp-discoverd = "lldp_discoverd.service"
 SYSTEMD_SERVICE:${PN}-redfishproxy = "redfishproxy.service"
 SYSTEMD_SERVICE:${PN}-i2c-service = "com.ibm.I2CService.service"
 SYSTEMD_SERVICE:${PN}-graphql-dbus-client = "graphql_dbus_client.service"
+SYSTEMD_SERVICE:${PN}-firmware-updater = "firmware_updater.service"
 SYSTEMD_SERVICE:${PN}-spdm = "xyz.openbmc_project.spdm.responder.service xyz.openbmc_project.spdm.requester.service xyz.openbmc_project.spdm.async_responder.service xyz.openbmc_project.spdm.async_requester.service"
 
 RDEPENDS:${PN}-graphql += "systemd"
@@ -126,5 +134,6 @@ RDEPENDS:${PN}-lldp-discoverd += "systemd"
 RDEPENDS:${PN}-redfishproxy += "systemd"
 RDEPENDS:${PN}-i2c-service += "systemd"
 RDEPENDS:${PN}-graphql-dbus-client += "systemd"
+RDEPENDS:${PN}-firmware-updater += "systemd"
 RDEPENDS:${PN}-spdm += "systemd"
 #PACKAGECONFIG:remove:pn-coroserver-examples = "spdm"

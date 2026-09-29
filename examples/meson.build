@@ -38,4 +38,6 @@ subdir('epicollect5-server')
 
 if sdbusplus_dep.found()
     subdir('redfish_graphql_dbus_client')
+    subdir('firmware_updater')
+    #subdir('watcher_test')
 endif
