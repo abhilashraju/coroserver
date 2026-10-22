@@ -20,6 +20,7 @@ DEPENDS = " \
     sdeventplus \
     sdbusplus \
     libssh2 \
+    libpam \
 "
 
 PACKAGECONFIG ??= ""
@@ -35,6 +36,8 @@ PACKAGES =+ " \
     ${PN}-redfishproxy \
     ${PN}-i2c-service \
     ${PN}-firmware-updater \
+    ${PN}-journalserver \
+    ${PN}-telnet-tls \
 "
 
 PACKAGES =+ "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
@@ -113,12 +116,24 @@ FILES:${PN}-firmware-updater = " \
     ${sysconfdir}/firmware_updater/firmware_updater.json \
 "
 
+FILES:${PN}-journalserver = " \
+    ${bindir}/journalserver \
+    ${systemd_system_unitdir}/journalserver.service \
+"
+
+FILES:${PN}-telnet-tls = " \
+    ${bindir}/telnet_tls_server \
+    ${bindir}/telnet_tls_client \
+    ${systemd_system_unitdir}/telnet_tls_server.service \
+    ${sysconfdir}/pam.d/telnet-tls \
+"
+
 FILES:${PN}-dev = " \
     ${includedir}/reactor \
     ${libdir}/pkgconfig/reactor.pc \
 "
 
-SYSTEMD_PACKAGES = "${PN}-graphql ${PN}-graphql-dbus-client ${PN}-lldp-discoverd ${PN}-redfishproxy ${PN}-i2c-service ${PN}-firmware-updater"
+SYSTEMD_PACKAGES = "${PN}-graphql ${PN}-graphql-dbus-client ${PN}-lldp-discoverd ${PN}-redfishproxy ${PN}-i2c-service ${PN}-firmware-updater ${PN}-journalserver ${PN}-telnet-tls"
 SYSTEMD_PACKAGES += "${@bb.utils.contains('PACKAGECONFIG', 'spdm', '${PN}-spdm', '', d)}"
 
 SYSTEMD_SERVICE:${PN}-graphql = "graphql_redfish_server.service"
@@ -128,6 +143,8 @@ SYSTEMD_SERVICE:${PN}-i2c-service = "com.ibm.I2CService.service"
 SYSTEMD_SERVICE:${PN}-graphql-dbus-client = "graphql_dbus_client.service"
 SYSTEMD_SERVICE:${PN}-firmware-updater = "firmware_updater.service"
 SYSTEMD_SERVICE:${PN}-spdm = "xyz.openbmc_project.spdm.responder.service xyz.openbmc_project.spdm.requester.service xyz.openbmc_project.spdm.async_responder.service xyz.openbmc_project.spdm.async_requester.service"
+SYSTEMD_SERVICE:${PN}-journalserver = "journalserver.service"
+SYSTEMD_SERVICE:${PN}-telnet-tls = "telnet_tls_server.service"
 
 RDEPENDS:${PN}-graphql += "systemd"
 RDEPENDS:${PN}-lldp-discoverd += "systemd"
@@ -136,4 +153,6 @@ RDEPENDS:${PN}-i2c-service += "systemd"
 RDEPENDS:${PN}-graphql-dbus-client += "systemd"
 RDEPENDS:${PN}-firmware-updater += "systemd"
 RDEPENDS:${PN}-spdm += "systemd"
+RDEPENDS:${PN}-journalserver += "systemd boost-url"
+RDEPENDS:${PN}-telnet-tls += "systemd ${PN}-console libpam"
 #PACKAGECONFIG:remove:pn-coroserver-examples = "spdm"

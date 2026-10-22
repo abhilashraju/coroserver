@@ -1,0 +1,27 @@
+[Unit]
+Description=Telnet over TLS console gateway
+After=network.target console_server.service
+Wants=console_server.service
+
+[Service]
+Type=simple
+# Set TELNET_TLS_ARGS in /etc/default/telnet-tls, e.g.
+#   TELNET_TLS_ARGS="--bind 10.0.0.5 --group hostconsole"
+# The default bind address is 127.0.0.1; bind to a specific interface address
+# to accept remote connections.
+EnvironmentFile=-/etc/default/telnet-tls
+ExecStart=/usr/bin/telnet_tls_server $TELNET_TLS_ARGS
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# PAM needs root to read the shadow database; restrict everything else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

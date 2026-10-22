@@ -277,6 +277,7 @@ class HttpServer
         {
             if (auto* sseFn = router_.findSseHandler(httpfunc.name()))
             {
+                httpfunc.setEndpoint(acceptor_.getRemoteEndpoint(*socket));
                 co_await handle_sse_client(socket, req, httpfunc, *sseFn);
                 co_return;
             }

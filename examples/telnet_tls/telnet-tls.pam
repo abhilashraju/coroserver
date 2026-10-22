@@ -1,0 +1,9 @@
+#%PAM-1.0
+# PAM service for telnet_tls_server.
+# Uses pam_unix directly for auth to avoid TOTP (pam_google_authenticator)
+# which is included in common-auth. Account/password/session still delegate
+# to the common stacks so system-wide policy is respected for those phases.
+auth     required  pam_unix.so nullok
+account  include   common-account
+password include   common-password
+session  include   common-session

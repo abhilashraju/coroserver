@@ -1,4 +1,26 @@
 
+# ── Telnet protocol unit tests ────────────────────────────────────────────────
+#
+# Pure header-only logic (include/telnet_protocol.hpp); no sockets, D-Bus or
+# TLS needed. Registered before the sdbusplus check below on purpose.
+test_telnet_protocol = executable(
+    'test_telnet_protocol',
+    'test_telnet_protocol.cpp',
+    include_directories: reactor_inc,
+    dependencies: [boost_dep],
+    cpp_args: [
+        '-DBOOST_TEST_DYN_LINK=0',
+        '-DBOOST_ALL_NO_LIB',
+    ],
+    build_by_default: false,
+)
+
+test(
+    'telnet_protocol',
+    test_telnet_protocol,
+    timeout: 60,
+)
+
 # ── DbusWatcher unit tests ────────────────────────────────────────────────────
 #
 # These tests target the DbusWatcher / DbusPropertyWatcher / DbusSignalWatcher

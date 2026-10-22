@@ -20,91 +20,68 @@
 #include <string>
 #include <unordered_set>
 using namespace NSNAME;
-// Forward declaration
-class HttpSubscription;
+// Maximum number of undelivered lines kept per subscriber. When a client is
+// slower than the journal, the oldest lines are dropped.
+constexpr std::size_t maxQueuedLines = 1000;
 
-// Subscription list to store HttpSubscription objects
-std::unordered_set<std::shared_ptr<HttpSubscription>> subscriptionList;
-bool journalRunning = false;
-
-class HttpSubscription
+// One connected SSE client. Lines are queued here by the journal reader and
+// drained by the client's own SSE handler coroutine on the same connection.
+class Subscriber
 {
   public:
-    explicit HttpSubscription(net::io_context& ioc, ssl::context& ctx,
-                              const std::string& url) :
-        url(url), timer(ioc), client(ioc, ctx)
+    explicit Subscriber(const net::any_io_executor& executor) : signal(executor)
+    {}
+
+    void push(const std::string& line)
     {
-        client.withUrl(boost::urls::parse_uri(url).value());
-        client.withMethod(http::verb::post);
-        client.withHeaders({{"Content-Type", "application/json"},
-                            {"User-Agent", "JournalServer/1.0"},
-                            {"Connection", "keep-alive"}});
+        if (lines.size() >= maxQueuedLines)
+        {
+            lines.pop_front();
+        }
+        lines.push_back(line);
+        // Wake the handler if it is waiting for data.
+        signal.cancel();
     }
 
-    // Notify method to send data to the subscriber
-    void notify(const std::string& message)
+    // Waits until at least one line is queued, then returns it.
+    net::awaitable<std::string> next()
     {
-        bool emptyQueue = messageQueue.empty();
-        messageQueue.push_back(message);
-        if (emptyQueue)
+        while (lines.empty())
         {
-            net::co_spawn(
-                timer.get_executor(),
-                [this]() -> net::awaitable<void> { co_await sendMessage(); },
-                net::detached);
+            signal.expires_at(boost::asio::steady_timer::time_point::max());
+            boost::system::error_code ec;
+            co_await signal.async_wait(
+                net::redirect_error(net::use_awaitable, ec));
         }
+        auto line = std::move(lines.front());
+        lines.pop_front();
+        co_return line;
     }
-    net::awaitable<void> sendMessage()
-    {
-        while (!messageQueue.empty())
-        {
-            auto message = messageQueue.front();
-
-            auto [ec, response] = co_await client.withBody(message)
-                                      .executeAndReturnAs<Response>();
-            if (ec)
-            {
-                timer.expires_after(std::chrono::seconds(10));
-                co_await timer.async_wait(net::use_awaitable);
-                continue;
-            }
-            messageQueue.pop_front();
-            LOG_INFO("Message sent to {}: {}", url, response.body());
-        }
-    }
-    struct Hash
-    {
-        std::size_t operator()(
-            const std::shared_ptr<HttpSubscription>& sub) const
-        {
-            return std::hash<std::string>()(sub->url);
-        }
-    };
 
   private:
-    std::string url;
-    std::deque<std::string> messageQueue;
-    boost::asio::steady_timer timer;
-    WebClient<beast::tcp_stream> client;
+    std::deque<std::string> lines;
+    boost::asio::steady_timer signal;
 };
 
-// Function to add a subscriber
-bool subscribe(boost::asio::io_context& io_ctx,
-               boost::asio::ssl::context& sslCtx, const std::string& url)
-{
-    boost::urls::url_view urlView(url);
+// Connected SSE clients. The server is single threaded, so no locking.
+std::unordered_set<std::shared_ptr<Subscriber>> subscribers;
+bool journalRunning = false;
 
-    auto sub = std::make_shared<HttpSubscription>(io_ctx, sslCtx, url);
-    return subscriptionList.insert(sub).second;
-}
-
-// Function to notify all subscribers (dummy HTTP POST, replace with real
-// implementation)
-void notifySubscribers(const std::string& message)
+// Removes the subscriber when its connection handler exits for any reason.
+struct SubscriberGuard
 {
-    for (const auto& sub : subscriptionList)
+    std::shared_ptr<Subscriber> subscriber;
+    ~SubscriberGuard()
     {
-        sub->notify(message);
+        subscribers.erase(subscriber);
+    }
+};
+
+void notifySubscribers(const std::string& line)
+{
+    for (const auto& sub : subscribers)
+    {
+        sub->push(line);
     }
 }
 net::awaitable<void> monitorJournal(boost::asio::io_context& io_context)
@@ -114,21 +91,26 @@ net::awaitable<void> monitorJournal(boost::asio::io_context& io_context)
 
     // Start journalctl process
     bp::child c("/usr/bin/journalctl", "-f", bp::std_out > pipe_out);
+    boost::asio::streambuf buf;
     while (c.running())
     {
-        std::vector<char> buf(1028);
         boost::system::error_code ec{};
 
-        auto size = co_await net::async_read(
-            pipe_out, net::buffer(buf),
-            net::redirect_error(net::use_awaitable, ec));
-        if (ec && ec != net::error::eof)
+        // One journal entry per SSE event, so read whole lines.
+        auto size = co_await net::async_read_until(
+            pipe_out, buf, '\n', net::redirect_error(net::use_awaitable, ec));
+        if (ec)
         {
-            LOG_INFO("Error: {}", ec.message());
+            if (ec != net::error::eof)
+            {
+                LOG_INFO("Error: {}", ec.message());
+            }
             break;
         }
 
-        std::string line(buf.data(), size);
+        auto begin = net::buffers_begin(buf.data());
+        std::string line(begin, begin + size - 1);
+        buf.consume(size);
 
         if (!line.empty())
         {
@@ -157,7 +139,8 @@ int main(int argc, const char* argv[])
     {
         getLogger().setLogLevel(LogLevel::DEBUG);
         LOG_INFO("Starting Journal Server");
-        auto [cert] = getArgs(parseCommandline(argc, argv), "--cert,-c");
+        auto [cert, key] =
+            getArgs(parseCommandline(argc, argv), "--cert,-c", "--key,-k");
 
         boost::asio::io_context io_context;
 
@@ -169,38 +152,48 @@ int main(int argc, const char* argv[])
                                 boost::asio::ssl::context::no_sslv2 |
                                 boost::asio::ssl::context::single_dh_use);
         std::cerr << "Cert Loading: \n";
-        std::string certDir = "/etc/ssl/private";
+        std::string certFile = "/etc/ssl/certs/https/server.mtls.pem";
+        std::string keyFile = "/etc/ssl/private/server.mtls.key";
         if (cert)
         {
-            certDir = std::string(*cert);
+            certFile = std::string(*cert);
         }
-        ssl_context.use_certificate_chain_file(certDir + "/server-cert.pem");
-        ssl_context.use_private_key_file(certDir + "/server-key.pem",
+        if (key)
+        {
+            keyFile = std::string(*key);
+        }
+        ssl_context.use_certificate_chain_file(certFile);
+        ssl_context.use_private_key_file(keyFile,
                                          boost::asio::ssl::context::pem);
         std::cerr << "Cert Loaded: \n";
         HttpRouter router;
         router.setIoContext(io_context);
-        TcpStreamType acceptor(io_context.get_executor(), 8080, ssl_context);
+        TcpStreamType acceptor(io_context.get_executor(), 18080, ssl_context);
         HttpServer server(io_context, acceptor, router);
-        router.add_post_handler(
+        // GET /subscribe turns the connection into a long-lived SSE stream.
+        // Journal lines are sent back on this same connection as events.
+        router.add_sse_handler(
             "/subscribe",
-            [&](auto& req, auto& params) -> net::awaitable<Response> {
-                auto url = req.body();
-                if (url.empty())
-                {
-                    co_return make_bad_request_error("URL is required",
-                                                     req.version());
-                }
-                if (!subscribe(io_context, ssl_context, url))
-                {
-                    co_return make_bad_request_error("Invalid URL",
-                                                     req.version());
-                }
-                nlohmann::json jsonResponse;
-                jsonResponse["status"] = "subscribed";
+            [&](Request& req, const http_function& params,
+                SseWriter writer) -> net::awaitable<void> {
+                LOG_INFO("Subscribe request from {}",
+                         params.endpoint().address().to_string());
+                auto sub = std::make_shared<Subscriber>(
+                    co_await net::this_coro::executor);
+                subscribers.insert(sub);
+                SubscriberGuard guard{sub};
                 startJournalMonitor(io_context);
-                co_return make_success_response(jsonResponse, http::status::ok,
-                                                req.version());
+
+                while (true)
+                {
+                    auto line = co_await sub->next();
+                    if (!co_await writer.write(line))
+                    {
+                        LOG_INFO("Subscriber {} disconnected",
+                                 params.endpoint().address().to_string());
+                        break;
+                    }
+                }
             });
         io_context.run();
     }

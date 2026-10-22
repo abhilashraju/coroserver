@@ -9,20 +9,21 @@ A zero-external-dependency, coroutine-based GraphQL server framework built on to
 1. [Architecture Overview](#architecture-overview)
 2. [Component Diagram](#component-diagram)
 3. [Request Lifecycle](#request-lifecycle)
-4. [Core Abstractions](#core-abstractions)
-5. [Building & Running](#building--running)
-6. [Redfish Example — Queries](#redfish-example--queries)
-7. [Redfish Example — Subscriptions (SSE)](#redfish-example--subscriptions-sse)
-8. [Creating a Domain-Specific GraphQL Server](#creating-a-domain-specific-graphql-server)
+4. [REST vs GraphQL — Network Traffic Comparison](#rest-vs-graphql--network-traffic-comparison)
+5. [Core Abstractions](#core-abstractions)
+6. [Building & Running](#building--running)
+7. [Redfish Example — Queries](#redfish-example--queries)
+8. [Redfish Example — Subscriptions (SSE)](#redfish-example--subscriptions-sse)
+9. [Creating a Domain-Specific GraphQL Server](#creating-a-domain-specific-graphql-server)
    - [Step 1 — Define Object Types in the Schema](#step-1--define-object-types-in-the-schema)
    - [Step 2 — Register Root Queries](#step-2--register-root-queries)
    - [Step 3 — Implement the Data Provider](#step-3--implement-the-data-provider)
    - [Step 4 — Implement the Executor](#step-4--implement-the-executor)
    - [Step 5 — Wire the Server Entry Point](#step-5--wire-the-server-entry-point)
-9. [Full Walk-through: Inventory GraphQL Server](#full-walk-through-inventory-graphql-server)
-10. [API Endpoints](#api-endpoints)
-11. [File Reference](#file-reference)
-12. [Dependencies](#dependencies)
+10. [Full Walk-through: Inventory GraphQL Server](#full-walk-through-inventory-graphql-server)
+11. [API Endpoints](#api-endpoints)
+12. [File Reference](#file-reference)
+13. [Dependencies](#dependencies)
 
 ---
 
@@ -124,6 +125,117 @@ Client sends:
   { "data": { "systems": [ { "id": "1", "name": "sys", "powerState": "On" } ] } }
   HTTP 200 returned to client
 ```
+
+---
+
+## REST vs GraphQL — Network Traffic Comparison
+
+The diagrams below show the same "fetch system name + power state + Ethernet interface
+IP addresses" use-case implemented with plain REST/Redfish versus a single GraphQL query.
+The contrast illustrates the two main problems GraphQL eliminates:
+
+* **Over-fetching** — REST returns full resource payloads; the client discards unused fields.
+* **N+1 round-trips** — fetching related resources (e.g. Ethernet interfaces) requires one
+  request per related URL discovered in the previous response.
+
+---
+
+### Scenario: "Get system name, power state, and all Ethernet IP addresses"
+
+---
+
+#### REST / Redfish — 4+ sequential round-trips
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C  as Client
+    participant B  as BMC (REST)
+    participant S  as Systems resource
+    participant E  as EthernetInterfaces resource
+    participant I1 as Interface eth0
+    participant I2 as Interface eth1
+
+    C->>B: GET /redfish/v1/Systems
+    Note over B,S: Full collection response<br/>(all system IDs + metadata)
+    B-->>C: 200 OK { Members: [{@odata.id: "/redfish/v1/Systems/1"}] }<br/>⚠ payload ~2 KB — only @odata.id used
+
+    C->>S: GET /redfish/v1/Systems/1
+    Note over S: Full System object:<br/>~40 fields (BIOS version, UUID,<br/>IndicatorLED, Boot, …)
+    S-->>C: 200 OK { Id, Name, PowerState, UUID, BIOSVersion, … }<br/>⚠ payload ~6 KB — only Name + PowerState used
+
+    C->>E: GET /redfish/v1/Systems/1/EthernetInterfaces
+    Note over E: Collection with member links only<br/>(no inline IP data)
+    E-->>C: 200 OK { Members: [eth0, eth1] }<br/>⚠ payload ~1 KB — IDs only
+
+    C->>I1: GET /redfish/v1/Systems/1/EthernetInterfaces/eth0
+    Note over I1: Full interface object:<br/>~25 fields (MAC, VLAN, DHCP, …)
+    I1-->>C: 200 OK { Id, MACAddress, IPv4Addresses, … }<br/>⚠ payload ~3 KB — only IPv4 used
+
+    C->>I2: GET /redfish/v1/Systems/1/EthernetInterfaces/eth1
+    I2-->>C: 200 OK { Id, MACAddress, IPv4Addresses, … }<br/>⚠ payload ~3 KB — only IPv4 used
+
+    Note over C: Total: 5 round-trips · ~15 KB transferred<br/>Useful data extracted: ~200 bytes
+```
+
+---
+
+#### GraphQL — 1 round-trip, fields projected server-side
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C  as Client
+    participant W  as BMCweb
+    participant G  as GraphQL Server
+    participant P  as Provider
+    participant B  as BMC
+
+    C->>W: POST /graphql ~140 bytes
+    Note over W: Authenticate & forward request
+    W->>G: POST /graphql ~140 bytes (forwarded)
+
+    Note over G: Parse query AST, resolveRootField
+
+    G->>P: get /redfish/v1/Systems/1
+    P->>B: GET /redfish/v1/Systems/1
+    B-->>P: 200 OK ~6 KB
+    P-->>G: json object
+
+    G->>P: get .../EthernetInterfaces/eth0
+    P->>B: GET .../EthernetInterfaces/eth0
+    B-->>P: 200 OK ~3 KB
+    P-->>G: json object
+
+    G->>P: get .../EthernetInterfaces/eth1
+    P->>B: GET .../EthernetInterfaces/eth1
+    B-->>P: 200 OK ~3 KB
+    P-->>G: json object
+
+    Note over G: Project only requested fields
+    G-->>W: 200 OK ~200 bytes
+    Note over W: Pass response through unchanged
+    W-->>C: 200 OK ~200 bytes
+
+    Note over C: 1 client round-trip, ~200 bytes received
+```
+
+---
+
+### Summary table
+
+| Dimension | REST / Redfish | GraphQL |
+|---|---|---|
+| **Client round-trips** | 5 (scales with N interfaces) | **1** (always) |
+| **Data transferred to client** | ~15 KB | **~200 bytes** |
+| **Over-fetching** | Yes — full objects returned | **No — projection server-side** |
+| **Under-fetching (N+1)** | Yes — one request per member link | **No — executor fans out internally** |
+| **Client coupling to URL structure** | High (must know every sub-resource URL) | **Low — schema-driven, URL-agnostic** |
+| **Partial failure handling** | Client must detect per-request | **Executor aggregates; partial `errors` array** |
+
+> **Note:** The GraphQL server still makes the same backend REST calls internally —
+> the gain is entirely on the **client-facing** leg: one query, one response,
+> exactly the fields requested.
 
 ---
 
@@ -453,11 +565,15 @@ JSON event on the stream.
 
 ### Available subscription fields
 
-| Field | Redfish target | Required argument |
-|-------|---------------|-------------------|
-| `systemStatus` | `/redfish/v1/Systems/{id}` | `id: ID!` |
-| `chassisStatus` | `/redfish/v1/Chassis/{id}` | `id: ID!` |
-| `ethernetInterfaceUpdates` | `/redfish/v1/Managers/bmc/EthernetInterfaces` (all members) | none |
+| Field | Redfish target | Arguments | Notes |
+|-------|---------------|-----------|-------|
+| `systemStatus` | `/redfish/v1/Systems/{id}` | `id: ID!` | single object |
+| `chassisStatus` | `/redfish/v1/Chassis/{id}` | `id: ID!` | single object |
+| `chassisUpdates` | `/redfish/v1/Chassis` | none | full chassis list |
+| `ethernetInterfaceUpdates` | `/redfish/v1/Managers/bmc/EthernetInterfaces` | none | all members expanded |
+| `sensorUpdates` | `/redfish/v1/Chassis/{chassisId}/Sensors` | `chassisId: ID` (default: `"chassis"`) | all sensors expanded |
+| `pcieDeviceUpdates` | `/redfish/v1/Systems/{systemId}/PCIeDevices` | `systemId: ID` (default: `"system"`) | all PCIe devices expanded |
+| `pcieDeviceStatus` | `/redfish/v1/Systems/{systemId}/PCIeDevices/{id}` | `systemId: ID`, `id: ID!` | single PCIe device |
 
 ### Endpoint
 
@@ -613,6 +729,135 @@ Because this is a list subscription, the server fetches the collection index
 (`/redfish/v1/Managers/bmc/EthernetInterfaces`) and then issues a live
 `getFresh()` GET for **each member** on every poll cycle — so you always see
 the current state of every interface in a single event.
+
+### Watch live sensor readings
+
+`sensorUpdates` is a **list subscription with `expandMembers`** — on every poll the
+server fetches the sensor collection index and then issues a live `getFresh()` GET for
+**each individual sensor URL**, so every event delivers the current reading, units, and
+health of every sensor under the given chassis.
+
+```bash
+curl -k -N \
+  'https://localhost:8444/graphql/subscribe?query=subscription+%7B+sensorUpdates(chassisId%3A+"chassis")+%7B+id+name+readingType+reading+readingUnits+readingRangeMax+readingRangeMin+status+%7B+health+state+%7D+%7D+%7D&interval=5'
+```
+
+Decoded subscription document:
+
+```graphql
+subscription {
+  sensorUpdates(chassisId: "chassis") {
+    id
+    name
+    readingType
+    reading
+    readingUnits
+    readingRangeMax
+    readingRangeMin
+    status {
+      health
+      state
+    }
+  }
+}
+```
+
+Omit the argument to use the default chassis (`"chassis"`):
+
+```graphql
+subscription {
+  sensorUpdates {
+    id
+    name
+    readingType
+    reading
+    readingUnits
+    status { health }
+  }
+}
+```
+
+Example event pushed every 5 seconds:
+
+```json
+{
+  "data": {
+    "sensorUpdates": [
+      {
+        "id": "Temp_CPU0",
+        "name": "CPU 0 Temperature",
+        "readingType": "Temperature",
+        "reading": 62.5,
+        "readingUnits": "Cel",
+        "readingRangeMax": 95.0,
+        "readingRangeMin": 0.0,
+        "status": { "health": "OK", "state": "Enabled" }
+      },
+      {
+        "id": "Fan_0",
+        "name": "Fan 0 Speed",
+        "readingType": "Rotational",
+        "reading": 4800.0,
+        "readingUnits": "RPM",
+        "readingRangeMax": 10000.0,
+        "readingRangeMin": 500.0,
+        "status": { "health": "OK", "state": "Enabled" }
+      },
+      {
+        "id": "Volt_12V",
+        "name": "12V Rail",
+        "readingType": "Voltage",
+        "reading": 12.05,
+        "readingUnits": "V",
+        "readingRangeMax": 12.6,
+        "readingRangeMin": 11.4,
+        "status": { "health": "OK", "state": "Enabled" }
+      }
+    ]
+  }
+}
+```
+
+**Consuming sensor events from JavaScript:**
+
+```javascript
+const url =
+  'https://bmc-host:8444/graphql/subscribe' +
+  '?query=' + encodeURIComponent(
+    'subscription { sensorUpdates(chassisId: "chassis") { id name readingType reading readingUnits status { health state } } }'
+  ) +
+  '&interval=5';
+
+const es = new EventSource(url);
+
+es.onmessage = (event) => {
+  const payload = JSON.parse(event.data);
+  if (payload.errors) {
+    console.error('Subscription error:', payload.errors);
+    es.close();
+    return;
+  }
+  for (const sensor of payload.data.sensorUpdates) {
+    console.log(
+      `[${new Date().toISOString()}] ${sensor.name}: ` +
+      `${sensor.reading} ${sensor.readingUnits} [${sensor.status.health}]`
+    );
+  }
+};
+
+es.onerror = () => { es.close(); };
+```
+
+To watch only sensors whose health has degraded, filter client-side:
+
+```javascript
+const degraded = payload.data.sensorUpdates.filter(
+  s => s.status.health !== 'OK'
+);
+if (degraded.length) {
+  console.warn('Degraded sensors:', degraded.map(s => s.name));
+}
+```
 
 ### Adding a new subscription field
 

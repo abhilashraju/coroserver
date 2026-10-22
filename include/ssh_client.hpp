@@ -185,9 +185,6 @@ class SSHClient
             co_return ec;
         }
 
-        // Set non-blocking mode
-        libssh2_session_set_blocking(sshSession.get(), 0);
-
         connected = true;
 
         LOG_INFO("SSH client connected successfully to {}@{}:{}",
@@ -404,6 +401,12 @@ class SSHClient
                 co_return boost::system::error_code(
                     ECONNREFUSED, boost::system::system_category());
             }
+
+            // Set non-blocking mode immediately after handshake so that
+            // libssh2_session_disconnect() in the session deleter never
+            // blocks or faults on a closed socket — even if authentication
+            // subsequently fails.
+            libssh2_session_set_blocking(sshSession.get(), 0);
 
             LOG_INFO("SSH handshake completed");
             co_return boost::system::error_code{};
