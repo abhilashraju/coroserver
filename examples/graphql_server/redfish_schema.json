@@ -144,6 +144,15 @@
       ]
     },
     {
+      "name": "Led",
+      "fields": [
+        { "name": "id",                      "responseKey": "Id",                      "returnType": "String",  "isList": false, "scalar": true  },
+        { "name": "name",                    "responseKey": "Name",                    "returnType": "String",  "isList": false, "scalar": true  },
+        { "name": "locationIndicatorActive", "responseKey": "LocationIndicatorActive", "returnType": "Boolean", "isList": false, "scalar": true  },
+        { "name": "indicatorLed",            "responseKey": "IndicatorLED",            "returnType": "String",  "isList": false, "scalar": true  }
+      ]
+    },
+    {
       "name": "PCIeDevice",
       "fields": [
         { "name": "id",            "responseKey": "Id",           "returnType": "String",       "isList": false, "scalar": true  },
@@ -207,7 +216,13 @@
         { "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" },
         { "name": "id",        "typeName": "ID", "required": true  }
       ],
-      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors/{id}" }
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors/{id}" },
+    { "name": "chassisLed",               "responseKey": "", "returnType": "Led",                    "isList": false, "scalar": false,
+      "arguments": [{ "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" }],
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}" },
+    { "name": "systemLed",                "responseKey": "", "returnType": "Led",                    "isList": false, "scalar": false,
+      "arguments": [{ "name": "systemId", "typeName": "ID", "required": false, "default": "system" }],
+      "redfishPath": "/redfish/v1/Systems/{systemId}" }
   ],
 
   "subscriptions": [
@@ -232,7 +247,13 @@
       "redfishPath": "/redfish/v1/Systems/{systemId}/PCIeDevices/{id}" },
     { "name": "sensorUpdates",            "responseKey": "", "returnType": "Sensor",            "isList": true,  "scalar": false,
       "arguments": [{ "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" }],
-      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors", "expandMembers": true }
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}/Sensors", "expandMembers": true },
+    { "name": "chassisLedUpdates",         "responseKey": "", "returnType": "Led",                "isList": false, "scalar": false,
+      "arguments": [{ "name": "chassisId", "typeName": "ID", "required": false, "default": "chassis" }],
+      "redfishPath": "/redfish/v1/Chassis/{chassisId}" },
+    { "name": "systemLedUpdates",          "responseKey": "", "returnType": "Led",                "isList": false, "scalar": false,
+      "arguments": [{ "name": "systemId", "typeName": "ID", "required": false, "default": "system" }],
+      "redfishPath": "/redfish/v1/Systems/{systemId}" }
   ],
 
   "dbusWatchers": [
@@ -277,6 +298,12 @@
       "dbusInterface": "xyz.openbmc_project.Sensor.Threshold.Critical",
       "dbusProperty":  "",
       "graphqlFields": ["sensorUpdates"]
+    },
+    {
+      "dbusObject":    "",
+      "dbusInterface": "xyz.openbmc_project.Led.Group",
+      "dbusProperty":  "Asserted",
+      "graphqlFields": ["chassisLedUpdates", "systemLedUpdates"]
     }
   ]
 }
