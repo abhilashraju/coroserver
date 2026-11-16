@@ -1,18 +1,17 @@
 /**
  *  Copyright Notice:
  *  Copyright 2021-2022 DMTF. All rights reserved.
- *  License: BSD 3-Clause License. For full text see link: https://github.com/DMTF/libspdm/blob/main/LICENSE.md
+ *  License: BSD 3-Clause License. For full text see link:
+ *https://github.com/DMTF/libspdm/blob/main/LICENSE.md
  **/
 
+#include <assert.h>
 #include <hal/base.h>
-
+#include <hal/library/debuglib.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
-#include <stdarg.h>
-
-#include <hal/library/debuglib.h>
 
 #if LIBSPDM_DEBUG_ASSERT_ENABLE
 #define LIBSPDM_DEBUG_LIBSPDM_ASSERT_NATIVE 0
@@ -21,25 +20,30 @@
 #define LIBSPDM_DEBUG_LIBSPDM_ASSERT_EXIT 3
 
 #ifndef LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG
-#define LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG LIBSPDM_DEBUG_LIBSPDM_ASSERT_DEADLOOP
+#define LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG LIBSPDM_DEBUG_LIBSPDM_ASSERT_EXIT
 #endif
 
-void libspdm_debug_assert(const char *file_name, size_t line_number, const char *description)
+void libspdm_debug_assert(const char* file_name, size_t line_number,
+                          const char* description)
 {
-    printf("LIBSPDM_ASSERT: %s(%zu): %s\n", file_name, line_number, description);
+    printf("LIBSPDM_ASSERT: %s(%zu): %s\n", file_name, line_number,
+           description);
+    fflush(stdout);
 
-#if (LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG == LIBSPDM_DEBUG_LIBSPDM_ASSERT_DEADLOOP)
+#if (LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG ==                                    \
+     LIBSPDM_DEBUG_LIBSPDM_ASSERT_DEADLOOP)
     {
         volatile int32_t ___i = 1;
         while (___i)
             ;
     }
-#elif (LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG == LIBSPDM_DEBUG_LIBSPDM_ASSERT_BREAKPOINT)
+#elif (LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG ==                                  \
+       LIBSPDM_DEBUG_LIBSPDM_ASSERT_BREAKPOINT)
 #if defined(_MSC_EXTENSIONS)
     __debugbreak();
 #endif
 #if defined(__GNUC__)
-    __asm__ __volatile__ ("int $3");
+    __asm__ __volatile__("int $3");
 #endif
 #elif (LIBSPDM_DEBUG_LIBSPDM_ASSERT_CONFIG == LIBSPDM_DEBUG_LIBSPDM_ASSERT_EXIT)
     exit(1);
@@ -51,7 +55,8 @@ void libspdm_debug_assert(const char *file_name, size_t line_number, const char 
 
 #if LIBSPDM_DEBUG_PRINT_ENABLE
 
-/* Define the maximum debug and assert message length that this library supports. */
+/* Define the maximum debug and assert message length that this library
+ * supports. */
 #define LIBSPDM_MAX_DEBUG_MESSAGE_LENGTH 0x100
 
 #ifndef LIBSPDM_DEBUG_LEVEL_CONFIG

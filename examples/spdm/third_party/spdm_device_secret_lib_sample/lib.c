@@ -11,8 +11,18 @@
  **/
 
 #include "internal/libspdm_common_lib.h"
+#include "spdm_crypt_ext_lib/spdm_crypt_ext_lib.h"
 
+#include <stdlib.h>
 #include <string.h>
+
+/* Environment variable naming the PEM file holding the responder private key.
+ * The key itself is never embedded in the binary. */
+#define SPDM_RESPONDER_KEY_PATH_ENV "SPDM_RESPONDER_KEY_PATH"
+#define SPDM_RESPONDER_KEY_MAX_SIZE (64 * 1024)
+
+extern bool libspdm_read_input_file(const char* file_name, void** file_data,
+                                    size_t* file_size);
 
 #if LIBSPDM_ENABLE_CAPABILITY_MEAS_CAP
 libspdm_return_t libspdm_measurement_collection(
@@ -212,7 +222,59 @@ bool libspdm_responder_data_sign(
     const uint8_t* message, size_t message_size, uint8_t* signature,
     size_t* sig_size)
 {
-    return false;
+    const char* key_path;
+    void* private_pem = NULL;
+    size_t private_pem_size = 0;
+    void* context = NULL;
+    bool result;
+
+    if ((message == NULL) || (signature == NULL) || (sig_size == NULL) ||
+        (pqc_asym_algo != 0))
+    {
+        return false;
+    }
+
+    key_path = getenv(SPDM_RESPONDER_KEY_PATH_ENV);
+    if ((key_path == NULL) || (key_path[0] == '\0'))
+    {
+        return false;
+    }
+
+    if (!libspdm_read_input_file(key_path, &private_pem, &private_pem_size))
+    {
+        return false;
+    }
+    if ((private_pem_size == 0) ||
+        (private_pem_size > SPDM_RESPONDER_KEY_MAX_SIZE))
+    {
+        libspdm_zero_mem(private_pem, private_pem_size);
+        free(private_pem);
+        return false;
+    }
+
+    result = libspdm_asym_get_private_key_from_pem(
+        base_asym_algo, private_pem, private_pem_size, NULL, &context);
+    libspdm_zero_mem(private_pem, private_pem_size);
+    free(private_pem);
+    if (!result)
+    {
+        return false;
+    }
+
+    if (is_data_hash)
+    {
+        result = libspdm_asym_sign_hash(spdm_version, op_code, base_asym_algo,
+                                        base_hash_algo, context, message,
+                                        message_size, signature, sig_size);
+    }
+    else
+    {
+        result = libspdm_asym_sign(spdm_version, op_code, base_asym_algo,
+                                   base_hash_algo, context, message,
+                                   message_size, signature, sig_size);
+    }
+    libspdm_asym_free(base_asym_algo, context);
+    return result;
 }
 
 #if LIBSPDM_ENABLE_CAPABILITY_PSK_CAP
@@ -231,7 +293,64 @@ bool libspdm_psk_master_secret_hkdf_expand(
 {
     return false;
 }
+
+bool libspdm_psk_exchange_rsp_opaque_data(
+    void* spdm_context, const void* psk_hint, uint16_t psk_hint_size,
+    spdm_version_number_t spdm_version, uint8_t measurement_hash_type,
+    const void* req_opaque_data, size_t req_opaque_data_size,
+    void* opaque_data, size_t* opaque_data_size)
+{
+    /* false: libspdm falls back to its default version-selection opaque data */
+    return false;
+}
+
+bool libspdm_psk_finish_rsp_opaque_data(
+    void* spdm_context, uint32_t session_id, spdm_version_number_t spdm_version,
+    const void* req_opaque_data, size_t req_opaque_data_size,
+    void* opaque_data, size_t* opaque_data_size)
+{
+    if (opaque_data_size == NULL)
+        return false;
+    *opaque_data_size = 0;
+    return true;
+}
 #endif /* LIBSPDM_ENABLE_CAPABILITY_PSK_CAP */
+
+#if LIBSPDM_ENABLE_CAPABILITY_KEY_EX_CAP
+bool libspdm_key_exchange_rsp_opaque_data(
+    void* spdm_context, spdm_version_number_t spdm_version,
+    uint8_t measurement_hash_type, uint8_t slot_id, uint8_t session_policy,
+    const void* req_opaque_data, size_t req_opaque_data_size,
+    void* opaque_data, size_t* opaque_data_size)
+{
+    /* false: libspdm falls back to its default version-selection opaque data */
+    return false;
+}
+
+bool libspdm_finish_rsp_opaque_data(
+    void* spdm_context, uint32_t session_id, spdm_version_number_t spdm_version,
+    uint8_t req_slot_id, const void* req_opaque_data,
+    size_t req_opaque_data_size, void* opaque_data, size_t* opaque_data_size)
+{
+    if (opaque_data_size == NULL)
+        return false;
+    *opaque_data_size = 0;
+    return true;
+}
+
+#if LIBSPDM_ENABLE_CAPABILITY_MUT_AUTH_CAP
+uint8_t libspdm_key_exchange_start_mut_auth(
+    void* spdm_context, uint32_t session_id, spdm_version_number_t spdm_version,
+    uint8_t slot_id, uint8_t* req_slot_id, uint8_t session_policy,
+    size_t opaque_data_length, const void* opaque_data,
+    bool* mandatory_mut_auth)
+{
+    *req_slot_id = 0;
+    *mandatory_mut_auth = false;
+    return 0;
+}
+#endif /* LIBSPDM_ENABLE_CAPABILITY_MUT_AUTH_CAP */
+#endif /* LIBSPDM_ENABLE_CAPABILITY_KEY_EX_CAP */
 
 #if LIBSPDM_ENABLE_CAPABILITY_SET_CERT_CAP
 bool libspdm_is_in_trusted_environment(void* spdm_context)

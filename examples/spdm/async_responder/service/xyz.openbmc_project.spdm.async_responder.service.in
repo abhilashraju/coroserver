@@ -4,6 +4,7 @@ Description=async attestation responder service
 [Service]
 ExecStart=/usr/bin/spdm_responder_async -p 2448 -d this_bmc
 Restart=always
+Environment=SPDM_RESPONDER_KEY_PATH=/etc/ssl/private/spdm_responder_key.pem
 Type=dbus
 BusName=@DEFAULT_BUSNAME@
 

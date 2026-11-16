@@ -506,6 +506,26 @@ int main() {
 - `SPDM_CERT_STORE_PATH`: Override default trust store path
 - `SPDM_CERT_MAX_SIZE`: Override maximum certificate size (default: 4MB)
 - `SPDM_PORT`: Override default TCP port (default: 2323)
+- `SPDM_RESPONDER_KEY_PATH`: Path of the PEM private key the responder signs
+  with (`GET_MEASUREMENTS` with a signature). It must match the leaf
+  certificate of `/etc/ssl/certs/https/server_cert.pem`. The service files set
+  it to `/etc/ssl/private/spdm_responder_key.pem`. The key is read for each
+  signature and is never embedded in the binary. Restrict it to the service
+  user (`chmod 600`).
+
+### Signed Measurements
+
+The responder serves `/etc/ssl/certs/https/server_cert.pem` as slot 0. The file
+may hold several PEM certificates; they are sent root first, preceded by the
+SPDM certificate chain header and the SHA-384 hash of the root certificate. The
+responder therefore offers SHA-384 as its only base hash algorithm.
+
+`MeasurementSet.SPDMGetSignedMeasurements` on the async requester sends the
+caller's 32 byte hex `Nonce` in a signed `GET_MEASUREMENTS`, verifies the
+signature against the leaf certificate of the requested slot, and returns the
+leaf public key (PEM), the negotiated SPDM version and `SignedMeasurements`.
+`SignedMeasurements` is the base64 of the requests and responses covered by the
+signature (the signature itself last).
 
 ### Custom Configuration
 

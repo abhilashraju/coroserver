@@ -23,7 +23,7 @@ DEPENDS = " \
     libpam \
 "
 
-PACKAGECONFIG ??= ""
+PACKAGECONFIG ??= "spdm"
 PACKAGECONFIG[libgraphqlparser] = ",,libgraphqlparser"
 PACKAGECONFIG[spdm] = "-Dspdm=enabled,-Dspdm=disabled,libspdm phosphor-logging phosphor-dbus-interfaces"
 
@@ -85,12 +85,12 @@ FILES:${PN}-redfishproxy = " \
 "
 
 FILES:${PN}-spdm = " \
-    ${bindir}/spdm_responder \
-    ${bindir}/spdm_requester \
+   # ${bindir}/spdm_responder \
+   # ${bindir}/spdm_requester \
     ${bindir}/spdm_responder_async \
     ${bindir}/spdm_requester_async \
-    ${systemd_system_unitdir}/xyz.openbmc_project.spdm.responder.service \
-    ${systemd_system_unitdir}/xyz.openbmc_project.spdm.requester.service \
+   # ${systemd_system_unitdir}/xyz.openbmc_project.spdm.responder.service \
+   # ${systemd_system_unitdir}/xyz.openbmc_project.spdm.requester.service \
     ${systemd_system_unitdir}/xyz.openbmc_project.spdm.async_requester.service \
     ${systemd_system_unitdir}/xyz.openbmc_project.spdm.async_responder.service \
     ${sysconfdir}/dbus-1/system.d/xyz.openbmc_project.spdm.responder.conf \
@@ -142,7 +142,7 @@ SYSTEMD_SERVICE:${PN}-redfishproxy = "redfishproxy.service"
 SYSTEMD_SERVICE:${PN}-i2c-service = "com.ibm.I2CService.service"
 SYSTEMD_SERVICE:${PN}-graphql-dbus-client = "graphql_dbus_client.service"
 SYSTEMD_SERVICE:${PN}-firmware-updater = "firmware_updater.service"
-SYSTEMD_SERVICE:${PN}-spdm = "xyz.openbmc_project.spdm.responder.service xyz.openbmc_project.spdm.requester.service xyz.openbmc_project.spdm.async_responder.service xyz.openbmc_project.spdm.async_requester.service"
+SYSTEMD_SERVICE:${PN}-spdm = "xyz.openbmc_project.spdm.async_responder.service xyz.openbmc_project.spdm.async_requester.service"
 SYSTEMD_SERVICE:${PN}-journalserver = "journalserver.service"
 SYSTEMD_SERVICE:${PN}-telnet-tls = "telnet_tls_server.service"
 

@@ -66,7 +66,7 @@ spdm_dep = declare_dependency(
     ],
 )
 
-subdir('spdm_responder')
-subdir('spdm_requester')
+#subdir('spdm_responder')
+#subdir('spdm_requester')
 subdir('async_responder')
 subdir('async_requester')
